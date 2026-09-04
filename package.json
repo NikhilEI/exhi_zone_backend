@@ -1,0 +1,25 @@
+{
+  "name": "exhi-zone-backend",
+  "version": "1.0.0",
+  "description": "Node.js + MySQL backend for the standalone Exhibitor Zone portal.",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "db:migrate": "node src/db/migrate.js",
+    "db:seed": "node src/db/seed.js"
+  },
+  "dependencies": {
+    "@node-rs/argon2": "^2.1.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "multer": "^2.2.0",
+    "mysql2": "^3.11.0",
+    "nodemailer": "^9.0.5",
+    "qrcode": "^1.5.4",
+    "zod": "^4.4.3"
+  }
+}
