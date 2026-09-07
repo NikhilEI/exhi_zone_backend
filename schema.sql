@@ -261,6 +261,10 @@ CREATE TABLE IF NOT EXISTS `exhibitor_directory_info` (
   `zone` varchar(100) DEFAULT NULL,
   `booth_no` varchar(50) DEFAULT NULL,
   `booth_type` enum('Raw Space','Shell Space') NOT NULL,
+  `booth_size` decimal(10,2) DEFAULT NULL,
+  `booth_width` decimal(10,2) DEFAULT NULL,
+  `booth_depth` decimal(10,2) DEFAULT NULL,
+  `booth_location` enum('1 Side Open','2 Side Open','3 Side Open','4 Side Open') DEFAULT NULL,
   `country` varchar(100) NOT NULL,
   `country_code` varchar(10) NOT NULL,
   `phone_no` varchar(30) DEFAULT NULL,
@@ -268,6 +272,11 @@ CREATE TABLE IF NOT EXISTS `exhibitor_directory_info` (
   `website` varchar(500) DEFAULT NULL,
   `company_profile` varchar(400) NOT NULL,
   `company_logo_document_id` bigint(20) unsigned DEFAULT NULL,
+  `contact_name` varchar(150) DEFAULT NULL,
+  `contact_designation` varchar(150) DEFAULT NULL,
+  `contact_phone` varchar(30) DEFAULT NULL,
+  `contact_email` varchar(254) DEFAULT NULL,
+  `contact_alternate_email` varchar(254) DEFAULT NULL,
   `status` enum('pending','completed') NOT NULL DEFAULT 'completed',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
@@ -282,6 +291,19 @@ CREATE TABLE IF NOT EXISTS `exhibitor_directory_info` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
+-- Idempotent column additions for existing databases (schema.sql is applied
+-- via CREATE TABLE IF NOT EXISTS, which does not alter tables that already exist).
+ALTER TABLE `exhibitor_directory_info`
+  ADD COLUMN IF NOT EXISTS `booth_size` decimal(10,2) DEFAULT NULL AFTER `booth_type`,
+  ADD COLUMN IF NOT EXISTS `booth_width` decimal(10,2) DEFAULT NULL AFTER `booth_size`,
+  ADD COLUMN IF NOT EXISTS `booth_depth` decimal(10,2) DEFAULT NULL AFTER `booth_width`,
+  ADD COLUMN IF NOT EXISTS `booth_location` enum('1 Side Open','2 Side Open','3 Side Open','4 Side Open') DEFAULT NULL AFTER `booth_depth`,
+  ADD COLUMN IF NOT EXISTS `contact_name` varchar(150) DEFAULT NULL AFTER `company_logo_document_id`,
+  ADD COLUMN IF NOT EXISTS `contact_designation` varchar(150) DEFAULT NULL AFTER `contact_name`,
+  ADD COLUMN IF NOT EXISTS `contact_phone` varchar(30) DEFAULT NULL AFTER `contact_designation`,
+  ADD COLUMN IF NOT EXISTS `contact_email` varchar(254) DEFAULT NULL AFTER `contact_phone`,
+  ADD COLUMN IF NOT EXISTS `contact_alternate_email` varchar(254) DEFAULT NULL AFTER `contact_email`;
 CREATE TABLE IF NOT EXISTS `exhibitor_event_profiles` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `uuid` char(36) NOT NULL DEFAULT '',

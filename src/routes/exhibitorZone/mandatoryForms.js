@@ -162,15 +162,22 @@ router.patch(
       await connection.query(
         `INSERT INTO exhibitor_directory_info
           (exhibitor_profile_id, event_id, company_name, brand_name, hall_no, zone, booth_no, booth_type,
+           booth_size, booth_width, booth_depth, booth_location,
            country, country_code, phone_no, email, website, company_profile, company_logo_document_id,
+           contact_name, contact_designation, contact_phone, contact_alternate_email,
            status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', NOW(), NOW())
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', NOW(), NOW())
          ON DUPLICATE KEY UPDATE
            company_name = VALUES(company_name), brand_name = VALUES(brand_name), hall_no = VALUES(hall_no),
            zone = VALUES(zone), booth_no = VALUES(booth_no), booth_type = VALUES(booth_type),
+           booth_size = VALUES(booth_size), booth_width = VALUES(booth_width), booth_depth = VALUES(booth_depth),
+           booth_location = VALUES(booth_location),
            country = VALUES(country), country_code = VALUES(country_code), phone_no = VALUES(phone_no),
            email = VALUES(email), website = VALUES(website), company_profile = VALUES(company_profile),
-           company_logo_document_id = VALUES(company_logo_document_id), status = 'completed', updated_at = NOW()`,
+           company_logo_document_id = VALUES(company_logo_document_id),
+           contact_name = VALUES(contact_name), contact_designation = VALUES(contact_designation),
+           contact_phone = VALUES(contact_phone), contact_alternate_email = VALUES(contact_alternate_email),
+           status = 'completed', updated_at = NOW()`,
         [
           profileId,
           req.user.eventId,
@@ -180,13 +187,21 @@ router.patch(
           b.zone || null,
           b.boothNo || null,
           b.boothType,
+          b.boothSize ?? null,
+          b.boothWidth ?? null,
+          b.boothDepth ?? null,
+          b.boothLocation || null,
           b.country,
           b.countryCode,
           b.phoneNo || null,
           b.email,
           b.website || null,
           b.companyProfile,
-          b.companyLogoDocumentId
+          b.companyLogoDocumentId,
+          b.contactName || null,
+          b.contactDesignation || null,
+          b.contactPhone || null,
+          b.contactAlternateEmail || null
         ]
       );
 
