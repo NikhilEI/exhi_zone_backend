@@ -45,7 +45,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
       `SELECT si.*, sc.name AS category_name, sc.slug AS category_slug,
-              (COALESCE(si.inventory_total, 0) - si.inventory_reserved - si.inventory_sold) AS inventory_available
+              (CAST(COALESCE(si.inventory_total, 0) AS SIGNED) - CAST(si.inventory_reserved AS SIGNED) - CAST(si.inventory_sold AS SIGNED)) AS inventory_available
        FROM service_items si
        JOIN service_categories sc ON sc.id = si.category_id
        WHERE si.event_id = ? AND si.is_active = 1
