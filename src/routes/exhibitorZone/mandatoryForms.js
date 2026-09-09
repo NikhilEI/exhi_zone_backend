@@ -39,30 +39,34 @@ async function upsertFormStatus(connection, { profileId, eventId, formKey, statu
 // dedicated Mandatory Forms tab. Adding a 3rd/4th/5th form later means only
 // inserting a mandatory_form_definitions row — this endpoint picks it up
 // automatically, no code change required here.
-// "booth-design-submission" is a special case in two ways: (1) it's only
-// required for Raw Space exhibitors, keyed off exhibitor_directory_info.
-// booth_type, and (2) its own content/review lives in the generic
-// form_templates/form_submissions system rather than mandatory_form_status,
-// so "completed" here just means "a submission exists" (regardless of the
-// reviewer's decision). There's no generic form-dependency or cross-system
-// mechanism, so both are special-cased inline here.
+// "booth-design-submission" and "fascia-name-submission" are special cases in
+// two ways: (1) each is only required for one booth type (Raw Space / Shell
+// Space respectively), keyed off exhibitor_directory_info.booth_type, and (2)
+// their content/review lives in the generic form_templates/form_submissions
+// system rather than mandatory_form_status, so "completed" here just means "a
+// submission exists" (regardless of the reviewer's decision). There's no
+// generic form-dependency or cross-system mechanism, so both are special-cased
+// inline here. The join to form_templates/form_submissions is generic (keyed
+// on form_key = slug), so a future form_key sharing a template slug rides
+// along automatically — only the CASE/WHERE booth-type gating is per-form.
 const REGISTRY_SELECT = `
   SELECT d.id, d.form_key, d.name, d.description, d.sort_order,
-         CASE WHEN d.form_key = 'booth-design-submission'
+         CASE WHEN d.form_key IN ('booth-design-submission', 'fascia-name-submission')
               THEN IF(bfs.id IS NOT NULL, 'completed', 'pending')
               ELSE COALESCE(s.status, 'pending') END AS status,
-         CASE WHEN d.form_key = 'booth-design-submission' THEN bfs.created_at ELSE s.completed_at END AS completed_at
+         CASE WHEN d.form_key IN ('booth-design-submission', 'fascia-name-submission') THEN bfs.created_at ELSE s.completed_at END AS completed_at
   FROM mandatory_form_definitions d
   LEFT JOIN mandatory_form_status s
     ON s.form_key = d.form_key AND s.exhibitor_profile_id = ? AND s.event_id = d.event_id
   LEFT JOIN exhibitor_directory_info edi
     ON edi.exhibitor_profile_id = ? AND edi.event_id = d.event_id
   LEFT JOIN form_templates bft
-    ON bft.event_id = d.event_id AND bft.slug = 'booth-design-submission'
+    ON bft.event_id = d.event_id AND bft.slug = d.form_key
   LEFT JOIN form_submissions bfs
     ON bfs.form_template_id = bft.id AND bfs.exhibitor_profile_id = ? AND bfs.event_id = d.event_id
   WHERE d.event_id = ? AND d.is_active = 1
     AND (d.form_key <> 'booth-design-submission' OR edi.booth_type = 'Raw Space')
+    AND (d.form_key <> 'fascia-name-submission' OR edi.booth_type = 'Shell Space')
   ORDER BY d.sort_order`;
 
 router.get(
@@ -574,13 +578,15 @@ router.get(
   asyncHandler(async (req, res) => {
     const profileId = await resolveOwnProfileId(pool, req);
     const [records] = await pool.query(
-      `SELECT id, full_name, designation, company_name, country, country_code, mobile_no, email, created_at
+      `SELECT id, badge_id, full_name, designation, company_name, country, country_code, mobile_no, email, created_at
        FROM badge_records WHERE exhibitor_profile_id = ? AND event_id = ? ORDER BY created_at`,
       [profileId, req.user.eventId]
     );
     res.json({ records });
   })
 );
+
+const BADGE_ID_PREFIX = "CI/2027/";
 
 router.post(
   "/badges-for-exhibitors/records",
@@ -593,12 +599,17 @@ router.post(
     try {
       await connection.beginTransaction();
 
-      await connection.query(
+      const [result] = await connection.query(
         `INSERT INTO badge_records
           (exhibitor_profile_id, event_id, full_name, designation, company_name, country, country_code, mobile_no, email, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
         [profileId, req.user.eventId, b.fullName, b.designation, b.companyName, b.country, b.countryCode, b.mobileNo, b.email]
       );
+
+      // Badge ID is derived from the row's own auto-increment id, so it's
+      // guaranteed unique without a separate counter or race condition.
+      const badgeId = `${BADGE_ID_PREFIX}${String(result.insertId).padStart(5, "0")}`;
+      await connection.query("UPDATE badge_records SET badge_id = ? WHERE id = ?", [badgeId, result.insertId]);
 
       await upsertFormStatus(connection, {
         profileId,
@@ -675,7 +686,7 @@ router.get(
   requireRole(...ADMIN_ROLES, "finance"),
   asyncHandler(async (req, res) => {
     const [records] = await pool.query(
-      `SELECT id, full_name, designation, company_name, country, country_code, mobile_no, email, created_at
+      `SELECT id, badge_id, full_name, designation, company_name, country, country_code, mobile_no, email, created_at
        FROM badge_records WHERE exhibitor_profile_id = ? AND event_id = ? ORDER BY created_at`,
       [req.params.profileId, req.user.eventId]
     );

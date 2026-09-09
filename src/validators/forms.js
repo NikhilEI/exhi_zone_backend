@@ -106,6 +106,10 @@ const boothDesignSubmissionSchema = z.object({
   declarationAccepted: z.literal(true)
 });
 
+const fasciaNameSubmissionSchema = z.object({
+  fasciaName: z.string().trim().min(1).max(28)
+});
+
 const FORM_SCHEMAS = new Map([
   ["badges", badgesSchema],
   ["stall-design-approval", stallDesignApprovalSchema],
@@ -119,7 +123,8 @@ const FORM_SCHEMAS = new Map([
   ["security-personnel", securityPersonnelSchema],
   ["additional-power-supply", additionalPowerSupplySchema],
   ["outdoor-space", outdoorSpaceSchema],
-  ["booth-design-submission", boothDesignSubmissionSchema]
+  ["booth-design-submission", boothDesignSubmissionSchema],
+  ["fascia-name-submission", fasciaNameSubmissionSchema]
 ]);
 
 module.exports = { FORM_SCHEMAS };

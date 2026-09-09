@@ -841,6 +841,7 @@ CREATE TABLE IF NOT EXISTS `badge_records` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `exhibitor_profile_id` bigint(20) unsigned NOT NULL,
   `event_id` bigint(20) unsigned NOT NULL,
+  `badge_id` varchar(20) DEFAULT NULL COMMENT 'e.g. CI/2027/00001 — assigned right after insert, unique per badge',
   `full_name` varchar(150) NOT NULL,
   `designation` varchar(150) NOT NULL,
   `company_name` varchar(255) NOT NULL,
@@ -851,11 +852,17 @@ CREATE TABLE IF NOT EXISTS `badge_records` (
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_badge_id` (`badge_id`),
   KEY `fk_badge_profile` (`exhibitor_profile_id`),
   KEY `fk_badge_event` (`event_id`),
   CONSTRAINT `fk_badge_event` FOREIGN KEY (`event_id`) REFERENCES `events` (`id`),
   CONSTRAINT `fk_badge_profile` FOREIGN KEY (`exhibitor_profile_id`) REFERENCES `exhibitor_event_profiles` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Idempotent column addition for existing databases.
+ALTER TABLE `badge_records`
+  ADD COLUMN IF NOT EXISTS `badge_id` varchar(20) DEFAULT NULL COMMENT 'e.g. CI/2027/00001 — assigned right after insert, unique per badge' AFTER `event_id`,
+  ADD UNIQUE KEY IF NOT EXISTS `uq_badge_id` (`badge_id`);
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;

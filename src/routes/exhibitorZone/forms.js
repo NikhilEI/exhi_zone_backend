@@ -15,7 +15,6 @@ const { z } = require("zod");
 const router = express.Router();
 
 const ADMIN_ROLES = ["super_admin", "organiser"];
-const EDITABLE_STATUSES = ["draft", "needs_info", "rejected", "changes_requested"];
 
 router.use(requireAuth, requireEventContext);
 
@@ -118,10 +117,9 @@ router.post(
     const existing = existingRows[0];
 
     if (existing && !template.allow_multiple) {
-      if (!EDITABLE_STATUSES.includes(existing.status)) {
-        throw new ApiError(409, "You have already submitted this form.");
-      }
-
+      // Exhibitors can always reopen and resubmit their own record, regardless
+      // of its current review status — editing an already-reviewed submission
+      // clears the prior decision and sends it back for re-review below.
       await pool.query(
         `UPDATE form_submissions
          SET data = ?, status = ?, version = version + 1, submitted_at = NOW(), updated_at = NOW(),
