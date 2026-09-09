@@ -56,10 +56,21 @@ const soundNoiseAcknowledgementSchema = z.object({
   acknowledged: z.literal(true)
 });
 
+const badgeRecordSchema = z.object({
+  fullName: z.string().trim().min(1).max(150),
+  designation: z.string().trim().min(1).max(150),
+  companyName: z.string().trim().min(1).max(255),
+  country: z.string().trim().min(1).max(100),
+  countryCode: z.string().trim().min(1).max(10),
+  mobileNo: z.string().trim().min(6).max(20),
+  email: z.string().trim().email().max(254)
+});
+
 module.exports = {
   exhibitorInformationSchema,
   productInformationSchema,
   principalAgentRecordSchema,
   principalAgentDeclarationSchema,
-  soundNoiseAcknowledgementSchema
+  soundNoiseAcknowledgementSchema,
+  badgeRecordSchema
 };

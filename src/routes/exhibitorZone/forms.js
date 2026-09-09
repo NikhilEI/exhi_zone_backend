@@ -15,7 +15,7 @@ const { z } = require("zod");
 const router = express.Router();
 
 const ADMIN_ROLES = ["super_admin", "organiser"];
-const EDITABLE_STATUSES = ["draft", "needs_info", "rejected"];
+const EDITABLE_STATUSES = ["draft", "needs_info", "rejected", "changes_requested"];
 
 router.use(requireAuth, requireEventContext);
 
@@ -43,6 +43,48 @@ router.get(
     );
     if (rows.length === 0) throw new ApiError(404, "Form template not found.");
     res.json({ template: { ...rows[0], schema: JSON.parse(rows[0].schema) } });
+  })
+);
+
+// Admin management of the form template registry itself — unlike the
+// exhibitor-facing GET /templates above, this is NOT filtered to is_active = 1,
+// so a disabled template can still be found here and re-enabled.
+router.get(
+  "/admin/templates",
+  requireRole(...ADMIN_ROLES),
+  asyncHandler(async (req, res) => {
+    const [rows] = await pool.query(
+      "SELECT * FROM form_templates WHERE event_id = ? ORDER BY form_type, sort_order",
+      [req.user.eventId]
+    );
+    res.json({ templates: rows });
+  })
+);
+
+router.patch(
+  "/admin/templates/:id",
+  requireRole(...ADMIN_ROLES),
+  asyncHandler(async (req, res) => {
+    const columnMap = { name: "name", description: "description", sortOrder: "sort_order", isActive: "is_active" };
+
+    const sets = [];
+    const values = [];
+    for (const [key, column] of Object.entries(columnMap)) {
+      if (req.body[key] !== undefined) {
+        sets.push(`${column} = ?`);
+        values.push(req.body[key]);
+      }
+    }
+    if (sets.length === 0) throw new ApiError(400, "No fields to update.");
+
+    values.push(req.params.id, req.user.eventId);
+    const [result] = await pool.query(
+      `UPDATE form_templates SET ${sets.join(", ")} WHERE id = ? AND event_id = ?`,
+      values
+    );
+    if (result.affectedRows === 0) throw new ApiError(404, "Form template not found.");
+
+    res.json({ message: "Form template updated." });
   })
 );
 
@@ -151,7 +193,7 @@ router.get(
 
     const profileId = await resolveOwnProfileId(pool, req);
     const [rows] = await pool.query(
-      `SELECT fs.*, ft.name AS template_name FROM form_submissions fs
+      `SELECT fs.*, ft.name AS template_name, ft.slug AS template_slug FROM form_submissions fs
        JOIN form_templates ft ON ft.id = fs.form_template_id
        WHERE fs.event_id = ? AND fs.exhibitor_profile_id = ?
        ORDER BY fs.created_at DESC`,
@@ -173,10 +215,17 @@ router.get(
   }),
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
-      `SELECT fs.*, ft.name AS template_name, c.display_name AS company_name FROM form_submissions fs
+      `SELECT fs.*, ft.name AS template_name, ft.slug AS template_slug, c.display_name AS company_name,
+              edi.hall_no, edi.booth_no, edi.booth_size,
+              CONCAT(su.first_name, ' ', su.last_name) AS submitted_by_name,
+              CONCAT(ru.first_name, ' ', ru.last_name) AS reviewer_name
+       FROM form_submissions fs
        JOIN form_templates ft ON ft.id = fs.form_template_id
        JOIN exhibitor_event_profiles eep ON eep.id = fs.exhibitor_profile_id
        JOIN companies c ON c.id = eep.company_id
+       LEFT JOIN exhibitor_directory_info edi ON edi.exhibitor_profile_id = fs.exhibitor_profile_id AND edi.event_id = fs.event_id
+       LEFT JOIN users su ON su.id = fs.submitted_by
+       LEFT JOIN users ru ON ru.id = fs.reviewer_id
        WHERE fs.id = ? AND fs.event_id = ? LIMIT 1`,
       [req.params.id, req.user.eventId]
     );

@@ -13,7 +13,8 @@ const {
   productInformationSchema,
   principalAgentRecordSchema,
   principalAgentDeclarationSchema,
-  soundNoiseAcknowledgementSchema
+  soundNoiseAcknowledgementSchema,
+  badgeRecordSchema
 } = require("../../validators/mandatoryForms");
 
 const GUIDELINE_VERSION = 1;
@@ -38,22 +39,37 @@ async function upsertFormStatus(connection, { profileId, eventId, formKey, statu
 // dedicated Mandatory Forms tab. Adding a 3rd/4th/5th form later means only
 // inserting a mandatory_form_definitions row — this endpoint picks it up
 // automatically, no code change required here.
+// "booth-design-submission" is a special case in two ways: (1) it's only
+// required for Raw Space exhibitors, keyed off exhibitor_directory_info.
+// booth_type, and (2) its own content/review lives in the generic
+// form_templates/form_submissions system rather than mandatory_form_status,
+// so "completed" here just means "a submission exists" (regardless of the
+// reviewer's decision). There's no generic form-dependency or cross-system
+// mechanism, so both are special-cased inline here.
+const REGISTRY_SELECT = `
+  SELECT d.id, d.form_key, d.name, d.description, d.sort_order,
+         CASE WHEN d.form_key = 'booth-design-submission'
+              THEN IF(bfs.id IS NOT NULL, 'completed', 'pending')
+              ELSE COALESCE(s.status, 'pending') END AS status,
+         CASE WHEN d.form_key = 'booth-design-submission' THEN bfs.created_at ELSE s.completed_at END AS completed_at
+  FROM mandatory_form_definitions d
+  LEFT JOIN mandatory_form_status s
+    ON s.form_key = d.form_key AND s.exhibitor_profile_id = ? AND s.event_id = d.event_id
+  LEFT JOIN exhibitor_directory_info edi
+    ON edi.exhibitor_profile_id = ? AND edi.event_id = d.event_id
+  LEFT JOIN form_templates bft
+    ON bft.event_id = d.event_id AND bft.slug = 'booth-design-submission'
+  LEFT JOIN form_submissions bfs
+    ON bfs.form_template_id = bft.id AND bfs.exhibitor_profile_id = ? AND bfs.event_id = d.event_id
+  WHERE d.event_id = ? AND d.is_active = 1
+    AND (d.form_key <> 'booth-design-submission' OR edi.booth_type = 'Raw Space')
+  ORDER BY d.sort_order`;
+
 router.get(
   "/",
   asyncHandler(async (req, res) => {
     const profileId = await resolveOwnProfileId(pool, req);
-
-    const [rows] = await pool.query(
-      `SELECT d.id, d.form_key, d.name, d.description, d.sort_order,
-              COALESCE(s.status, 'pending') AS status, s.completed_at
-       FROM mandatory_form_definitions d
-       LEFT JOIN mandatory_form_status s
-         ON s.form_key = d.form_key AND s.exhibitor_profile_id = ? AND s.event_id = d.event_id
-       WHERE d.event_id = ? AND d.is_active = 1
-       ORDER BY d.sort_order`,
-      [profileId, req.user.eventId]
-    );
-
+    const [rows] = await pool.query(REGISTRY_SELECT, [profileId, profileId, profileId, req.user.eventId]);
     res.json({ forms: rows });
   })
 );
@@ -63,16 +79,12 @@ router.get(
   "/status/:profileId",
   requireRole(...ADMIN_ROLES, "finance"),
   asyncHandler(async (req, res) => {
-    const [rows] = await pool.query(
-      `SELECT d.id, d.form_key, d.name, d.sort_order,
-              COALESCE(s.status, 'pending') AS status, s.completed_at
-       FROM mandatory_form_definitions d
-       LEFT JOIN mandatory_form_status s
-         ON s.form_key = d.form_key AND s.exhibitor_profile_id = ? AND s.event_id = d.event_id
-       WHERE d.event_id = ? AND d.is_active = 1
-       ORDER BY d.sort_order`,
-      [req.params.profileId, req.user.eventId]
-    );
+    const [rows] = await pool.query(REGISTRY_SELECT, [
+      req.params.profileId,
+      req.params.profileId,
+      req.params.profileId,
+      req.user.eventId
+    ]);
     res.json({ forms: rows });
   })
 );
@@ -554,6 +566,120 @@ router.patch(
     }).catch((err) => console.error("Failed to notify admins of sound/noise acknowledgement:", err));
 
     res.json({ message: "Acknowledgement saved." });
+  })
+);
+
+router.get(
+  "/badges-for-exhibitors",
+  asyncHandler(async (req, res) => {
+    const profileId = await resolveOwnProfileId(pool, req);
+    const [records] = await pool.query(
+      `SELECT id, full_name, designation, company_name, country, country_code, mobile_no, email, created_at
+       FROM badge_records WHERE exhibitor_profile_id = ? AND event_id = ? ORDER BY created_at`,
+      [profileId, req.user.eventId]
+    );
+    res.json({ records });
+  })
+);
+
+router.post(
+  "/badges-for-exhibitors/records",
+  validate(badgeRecordSchema),
+  asyncHandler(async (req, res) => {
+    const profileId = await resolveOwnProfileId(pool, req);
+    const b = req.body;
+
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      await connection.query(
+        `INSERT INTO badge_records
+          (exhibitor_profile_id, event_id, full_name, designation, company_name, country, country_code, mobile_no, email, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [profileId, req.user.eventId, b.fullName, b.designation, b.companyName, b.country, b.countryCode, b.mobileNo, b.email]
+      );
+
+      await upsertFormStatus(connection, {
+        profileId,
+        eventId: req.user.eventId,
+        formKey: "badges-for-exhibitors",
+        status: "completed"
+      });
+
+      await connection.commit();
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+
+    notifyAdmins(pool, req.user.eventId, {
+      title: "Badge added",
+      message: `An exhibitor added a badge for ${b.fullName}.`,
+      type: "info"
+    }).catch((err) => console.error("Failed to notify admins of badge submission:", err));
+
+    res.status(201).json({ message: "Badge added." });
+  })
+);
+
+router.delete(
+  "/badges-for-exhibitors/records/:id",
+  asyncHandler(async (req, res) => {
+    const profileId = await resolveOwnProfileId(pool, req);
+    const recordId = Number(req.params.id);
+    if (!Number.isInteger(recordId) || recordId <= 0) throw new ApiError(400, "Invalid record id.");
+
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      const [existing] = await connection.query(
+        "SELECT id FROM badge_records WHERE id = ? AND exhibitor_profile_id = ? AND event_id = ? FOR UPDATE",
+        [recordId, profileId, req.user.eventId]
+      );
+      if (existing.length === 0) throw new ApiError(404, "Record not found.");
+
+      await connection.query("DELETE FROM badge_records WHERE id = ?", [recordId]);
+
+      const [remaining] = await connection.query(
+        "SELECT COUNT(*) AS count FROM badge_records WHERE exhibitor_profile_id = ? AND event_id = ?",
+        [profileId, req.user.eventId]
+      );
+      const status = remaining[0].count > 0 ? "completed" : "pending";
+
+      await upsertFormStatus(connection, {
+        profileId,
+        eventId: req.user.eventId,
+        formKey: "badges-for-exhibitors",
+        status
+      });
+
+      await connection.commit();
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+
+    res.json({ message: "Badge deleted." });
+  })
+);
+
+// Admin visibility into a specific exhibitor's badge list.
+router.get(
+  "/badges-for-exhibitors/admin/:profileId",
+  requireRole(...ADMIN_ROLES, "finance"),
+  asyncHandler(async (req, res) => {
+    const [records] = await pool.query(
+      `SELECT id, full_name, designation, company_name, country, country_code, mobile_no, email, created_at
+       FROM badge_records WHERE exhibitor_profile_id = ? AND event_id = ? ORDER BY created_at`,
+      [req.params.profileId, req.user.eventId]
+    );
+    res.json({ records });
   })
 );
 

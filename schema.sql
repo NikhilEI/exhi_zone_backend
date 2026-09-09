@@ -304,6 +304,12 @@ ALTER TABLE `exhibitor_directory_info`
   ADD COLUMN IF NOT EXISTS `contact_phone` varchar(30) DEFAULT NULL AFTER `contact_designation`,
   ADD COLUMN IF NOT EXISTS `contact_email` varchar(254) DEFAULT NULL AFTER `contact_phone`,
   ADD COLUMN IF NOT EXISTS `contact_alternate_email` varchar(254) DEFAULT NULL AFTER `contact_email`;
+
+-- Booth Design Submission's actual content and review workflow live in the
+-- generic form_templates/form_submissions system (see forms.js) instead of a
+-- bespoke table, so it gets version tracking and admin review for free. A
+-- `booth_design_submissions` table briefly existed here and has been removed.
+
 CREATE TABLE IF NOT EXISTS `exhibitor_event_profiles` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `uuid` char(36) NOT NULL DEFAULT '',
@@ -830,6 +836,26 @@ CREATE TABLE IF NOT EXISTS `principal_agent_records` (
   CONSTRAINT `fk_par_profile` FOREIGN KEY (`exhibitor_profile_id`) REFERENCES `exhibitor_event_profiles` (`id`),
   CONSTRAINT `fk_par_sector` FOREIGN KEY (`sector_id`) REFERENCES `principal_agent_sectors` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=9 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `badge_records` (
+  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  `exhibitor_profile_id` bigint(20) unsigned NOT NULL,
+  `event_id` bigint(20) unsigned NOT NULL,
+  `full_name` varchar(150) NOT NULL,
+  `designation` varchar(150) NOT NULL,
+  `company_name` varchar(255) NOT NULL,
+  `country` varchar(100) NOT NULL,
+  `country_code` varchar(10) NOT NULL,
+  `mobile_no` varchar(20) NOT NULL,
+  `email` varchar(254) NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `fk_badge_profile` (`exhibitor_profile_id`),
+  KEY `fk_badge_event` (`event_id`),
+  CONSTRAINT `fk_badge_event` FOREIGN KEY (`event_id`) REFERENCES `events` (`id`),
+  CONSTRAINT `fk_badge_profile` FOREIGN KEY (`exhibitor_profile_id`) REFERENCES `exhibitor_event_profiles` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;

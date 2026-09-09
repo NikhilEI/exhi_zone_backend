@@ -97,6 +97,15 @@ const outdoorSpaceSchema = z.object({
   sqmsRequired: z.coerce.number().positive().max(100000)
 });
 
+// Attaching the design is mandatory regardless of contractor — "No" is
+// disabled in the UI, so attachDesign is always "Yes" in practice.
+const boothDesignSubmissionSchema = z.object({
+  standContractor: z.string().trim().min(1).max(255),
+  attachDesign: z.literal("Yes"),
+  designDocumentId: z.coerce.number().int().positive(),
+  declarationAccepted: z.literal(true)
+});
+
 const FORM_SCHEMAS = new Map([
   ["badges", badgesSchema],
   ["stall-design-approval", stallDesignApprovalSchema],
@@ -109,7 +118,8 @@ const FORM_SCHEMAS = new Map([
   ["translators", translatorsSchema],
   ["security-personnel", securityPersonnelSchema],
   ["additional-power-supply", additionalPowerSupplySchema],
-  ["outdoor-space", outdoorSpaceSchema]
+  ["outdoor-space", outdoorSpaceSchema],
+  ["booth-design-submission", boothDesignSubmissionSchema]
 ]);
 
 module.exports = { FORM_SCHEMAS };
