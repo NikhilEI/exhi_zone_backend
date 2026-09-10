@@ -135,6 +135,75 @@ router.patch(
   })
 );
 
+// GET /admin/exhibitor-progress — per-company mandatory-form completion
+// matrix plus event-wide stats, for the admin "Exhibitor Progress" page.
+// Re-runs REGISTRY_SELECT once per profile — the same query the
+// exhibitor-facing GET / (and GET /status/:profileId) use — so booth-type
+// gating (Raw Space vs Shell Space) and any future form are reflected here
+// automatically with no duplicated logic. One query per exhibitor is fine at
+// this scale (an event's exhibitor list, not a huge table).
+router.get(
+  "/admin/exhibitor-progress",
+  requireRole(...ADMIN_ROLES, "finance"),
+  asyncHandler(async (req, res) => {
+    const eventId = req.user.eventId;
+    const [profiles] = await pool.query(
+      `SELECT eep.id AS profile_id, c.display_name AS company_name, eep.profile_status
+       FROM exhibitor_event_profiles eep JOIN companies c ON c.id = eep.company_id
+       WHERE eep.event_id = ? ORDER BY c.display_name`,
+      [eventId]
+    );
+
+    const exhibitors = await Promise.all(
+      profiles.map(async (p) => {
+        const [rows] = await pool.query(REGISTRY_SELECT, [p.profile_id, p.profile_id, p.profile_id, eventId]);
+        const totalForms = rows.length;
+        const completedForms = rows.filter((r) => r.status === "completed").length;
+        const inProgressForms = rows.filter((r) => r.status === "in_progress").length;
+        const pendingForms = totalForms - completedForms - inProgressForms;
+        return {
+          profileId: p.profile_id,
+          companyName: p.company_name,
+          profileStatus: p.profile_status,
+          totalForms,
+          completedForms,
+          inProgressForms,
+          pendingForms,
+          completionPct: totalForms > 0 ? Math.round((completedForms / totalForms) * 100) : 0,
+          forms: rows.map((r) => ({ formKey: r.form_key, name: r.name, status: r.status, completedAt: r.completed_at }))
+        };
+      })
+    );
+
+    // Per-form breakdown across the whole event — which forms are lagging,
+    // not just which exhibitors are lagging.
+    const formStatsMap = new Map();
+    for (const ex of exhibitors) {
+      for (const f of ex.forms) {
+        if (!formStatsMap.has(f.formKey)) {
+          formStatsMap.set(f.formKey, { formKey: f.formKey, name: f.name, applicable: 0, completed: 0, inProgress: 0, pending: 0 });
+        }
+        const s = formStatsMap.get(f.formKey);
+        s.applicable += 1;
+        if (f.status === "completed") s.completed += 1;
+        else if (f.status === "in_progress") s.inProgress += 1;
+        else s.pending += 1;
+      }
+    }
+
+    const totalExhibitors = exhibitors.length;
+    const fullyCompleted = exhibitors.filter((e) => e.totalForms > 0 && e.completedForms === e.totalForms).length;
+    const notStarted = exhibitors.filter((e) => e.completedForms === 0 && e.inProgressForms === 0).length;
+    const avgCompletionPct = totalExhibitors > 0 ? Math.round(exhibitors.reduce((s, e) => s + e.completionPct, 0) / totalExhibitors) : 0;
+
+    res.json({
+      exhibitors,
+      formStats: Array.from(formStatsMap.values()),
+      summary: { totalExhibitors, fullyCompleted, notStarted, avgCompletionPct }
+    });
+  })
+);
+
 router.get(
   "/product-categories",
   asyncHandler(async (req, res) => {

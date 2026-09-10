@@ -20,7 +20,16 @@ app.use(
     credentials: true
   })
 );
-app.use(express.json());
+// The `verify` hook stashes the raw request bytes on req.rawBody alongside
+// the normally-parsed req.body — needed only by the Razorpay webhook route,
+// which must HMAC the exact bytes Razorpay signed, not a re-serialized copy.
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    }
+  })
+);
 app.use(cookieParser());
 
 app.get("/api/health", (req, res) => {

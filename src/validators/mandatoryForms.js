@@ -42,10 +42,6 @@ const principalAgentRecordSchema = z
   .refine((data) => data.sectorId || data.customSector, {
     message: "Please select a sector or specify a custom sector.",
     path: ["sectorId"]
-  })
-  .refine((data) => !data.website || /^https?:\/\/.+/i.test(data.website), {
-    message: "Please enter a valid URL (starting with http:// or https://).",
-    path: ["website"]
   });
 
 const principalAgentDeclarationSchema = z.object({
