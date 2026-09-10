@@ -81,7 +81,7 @@ function resolveCompanyKey(name) {
 async function planImport(pool, wb) {
   const report = {
     companies: { create: [], skipNoName: 0 },
-    users: { create: 0, noEmailSkipped: 0 },
+    users: { create: 0, placeholderEmail: 0 },
     stalls: { allocate: [], collisions: [] },
     directoryInfo: { create: 0, truncatedProfile: [] },
     principalAgent: { create: 0, unmatched: [] },
@@ -163,6 +163,14 @@ async function planImport(pool, wb) {
       companyProfile: truncate(companyProfileRaw, 400)
     };
     rec.fullyComplete = Boolean(rec.email && rec.boothType && rec.companyProfile);
+    // Every real row has a username -> every one gets a login `users` row.
+    // Login is by email OR username (see auth.js), so a real email isn't
+    // required for that — accounts without one get a placeholder address
+    // (RFC 2606 .invalid TLD, never a real deliverable domain) purely to
+    // satisfy the `users.email` NOT NULL/UNIQUE constraint; they log in with
+    // their username instead.
+    rec.hasRealEmail = Boolean(rec.email);
+    rec.loginEmail = rec.email || `${rec.username}@legacy-import.invalid`;
     if (companyProfileRaw.length > 400) report.directoryInfo.truncatedProfile.push(rec.companyName);
     if (mobileRaw && isLogoFilename(mobileRaw)) {
       report.warnings.push(`"${rec.companyName}": Mobile No column held a logo filename ("${mobileRaw}"), dropped.`);
@@ -173,8 +181,8 @@ async function planImport(pool, wb) {
     const k = key(companyName);
     if (!companyKeyToIndexes.has(k)) companyKeyToIndexes.set(k, []);
     companyKeyToIndexes.get(k).push(idx);
-    if (rec.email) report.users.create += 1;
-    else report.users.noEmailSkipped += 1;
+    report.users.create += 1;
+    if (!rec.hasRealEmail) report.users.placeholderEmail += 1;
     report.companies.create.push(rec.companyName);
   });
 
@@ -288,7 +296,10 @@ async function planImport(pool, wb) {
       return;
     }
     idxs.forEach((companyIdx) => {
-      if (!companies[companyIdx].email) {
+      // Every migrated company now gets a login user (email or username), so
+      // this never actually skips — kept as a defensive check in case that
+      // assumption ever stops holding.
+      if (!companies[companyIdx].username) {
         report.fascia.skippedNoUser += 1;
         return;
       }
@@ -331,7 +342,10 @@ async function planImport(pool, wb) {
       continue;
     }
     const companyIdx = idxs[0]; // orders belong to one company; if the name is duplicated, attribute to the first
-    if (!companies[companyIdx].email) {
+    // Every migrated company now gets a login user (email or username), so
+    // this never actually skips — kept as a defensive check in case that
+    // assumption ever stops holding.
+    if (!companies[companyIdx].username) {
       report.orders.skippedNoUser += 1;
       continue;
     }
@@ -369,11 +383,15 @@ function reportToLines(plan) {
   const lines = [];
   lines.push(`Target event: ${event.name} (id ${eventId})`);
   lines.push(`Companies to create: ${report.companies.create.length} (skipped ${report.companies.skipNoName} row with no company name)`);
-  lines.push(`Login accounts to create (have an email): ${report.users.create}`);
-  lines.push(`Companies with no email — no login created: ${report.users.noEmailSkipped}`);
+  lines.push(`Login accounts to create: ${report.users.create} (every migrated company gets one, by username and/or email)`);
+  lines.push(`  ...of those, with a real email: ${report.users.create - report.users.placeholderEmail}; username-only (placeholder email): ${report.users.placeholderEmail}`);
   lines.push(`Stall allocations: ${report.stalls.allocate.length} (${report.stalls.collisions.length} booth collisions skipped)`);
   report.stalls.collisions.forEach((c) => lines.push(`  COLLISION: ${c}`));
-  lines.push(`Exhibitor Information (full profile) to pre-fill: ${companies.filter((c) => c.fullyComplete).length}`);
+  lines.push(
+    `Exhibitor Information: every company gets a pre-filled record with whatever's known — ${companies.filter((c) => c.fullyComplete).length} fully complete (marked done), ${
+      companies.length - companies.filter((c) => c.fullyComplete).length
+    } partial (still pending, form pre-fills what's known)`
+  );
   if (report.directoryInfo.truncatedProfile.length) lines.push(`  Company Profile text truncated to 400 chars for: ${report.directoryInfo.truncatedProfile.join(", ")}`);
   lines.push(`Principal/Agent records: ${report.principalAgent.create} (unmatched company: ${report.principalAgent.unmatched.length})`);
   lines.push(`Product category selections: ${report.productIndex.create} (unmatched subcategory text: ${report.productIndex.unmatchedSubcategory.length})`);
@@ -397,10 +415,14 @@ function reportToLines(plan) {
 // would create duplicate companies. Returns the list of emails that already
 // exist (empty = safe to apply).
 async function checkAlreadyImported(pool, plan) {
-  const migratedEmails = plan.companies.filter((c) => c.email).map((c) => c.email);
-  if (!migratedEmails.length) return [];
-  const [already] = await pool.query("SELECT email FROM users WHERE email IN (?)", [migratedEmails]);
-  return already.map((r) => r.email);
+  const usernames = plan.companies.map((c) => c.username).filter(Boolean);
+  const realEmails = plan.companies.filter((c) => c.hasRealEmail).map((c) => c.email);
+  if (!usernames.length && !realEmails.length) return [];
+  const [already] = await pool.query(
+    "SELECT email, username FROM users WHERE username IN (?) OR email IN (?)",
+    [usernames.length ? usernames : [null], realEmails.length ? realEmails : [null]]
+  );
+  return already.map((r) => r.username || r.email);
 }
 
 // Performs every write inside one transaction. Throws (and rolls back) on
@@ -437,49 +459,60 @@ async function applyImport(pool, plan) {
       );
       profileIdOf[i] = profileResult.insertId;
 
-      if (c.email) {
-        const passwordHash = await hashPassword(c.password);
-        const userUuid = crypto.randomUUID();
-        const [userResult] = await connection.query(
-          `INSERT INTO users
-            (uuid, email, password_hash, first_name, last_name, phone, timezone, locale, login_attempts, is_active, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'Asia/Kolkata', 'en-IN', 0, 1, NOW(), NOW())`,
-          [userUuid, c.email, passwordHash, c.firstName || "Exhibitor", c.lastName || "Contact", c.phone || null]
-        );
-        userIdOf[i] = userResult.insertId;
+      // Every migrated company gets a login account — by username if it has
+      // no real email (most of them), so every imported exhibitor can log
+      // in, not just the ones with a real email on file.
+      const passwordHash = await hashPassword(c.password);
+      const userUuid = crypto.randomUUID();
+      const [userResult] = await connection.query(
+        `INSERT INTO users
+          (uuid, email, username, password_hash, first_name, last_name, phone, timezone, locale, login_attempts, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'Asia/Kolkata', 'en-IN', 0, 1, NOW(), NOW())`,
+        [userUuid, c.loginEmail, c.username, passwordHash, c.firstName || "Exhibitor", c.lastName || "Contact", c.phone || null]
+      );
+      userIdOf[i] = userResult.insertId;
 
-        await connection.query(
-          `INSERT INTO user_event_roles (user_id, event_id, role_id, company_id, granted_at, is_active, created_at, updated_at)
-           VALUES (?, ?, ?, ?, NOW(), 1, NOW(), NOW())`,
-          [userIdOf[i], eventId, exhibitorAdminRole.id, companyIdOf[i]]
-        );
-      }
+      await connection.query(
+        `INSERT INTO user_event_roles (user_id, event_id, role_id, company_id, granted_at, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, NOW(), 1, NOW(), NOW())`,
+        [userIdOf[i], eventId, exhibitorAdminRole.id, companyIdOf[i]]
+      );
 
+      // Every migrated company gets a directory_info row now — with
+      // whatever fields are actually known, nulls for the rest (the column
+      // is nullable specifically for this) — so the Exhibitor Information
+      // form always opens pre-filled instead of blank, even for exhibitors
+      // where the legacy sheet didn't have enough for a complete profile.
+      // Only a genuinely fullyComplete row gets marked 'completed': that's
+      // also what unlocks the Booth Design / Fascia Name forms, since their
+      // gating keys off booth_type actually being set — an exhibitor with a
+      // partial row still needs to fill in the rest themselves first.
+      await connection.query(
+        `INSERT INTO exhibitor_directory_info
+          (exhibitor_profile_id, event_id, company_name, brand_name, hall_no, booth_no, booth_type,
+           country, country_code, phone_no, email, website, company_profile,
+           contact_name, contact_designation, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [
+          profileIdOf[i],
+          eventId,
+          c.companyName,
+          c.firstName || c.companyName,
+          c.hallNo || null,
+          c.boothNo || null,
+          c.boothType || null,
+          c.country,
+          c.countryCode || "+91",
+          c.phone || null,
+          c.email || null,
+          c.website || null,
+          c.companyProfile || null,
+          c.firstName || null,
+          c.designation || null,
+          c.fullyComplete ? "completed" : "pending"
+        ]
+      );
       if (c.fullyComplete) {
-        await connection.query(
-          `INSERT INTO exhibitor_directory_info
-            (exhibitor_profile_id, event_id, company_name, brand_name, hall_no, booth_no, booth_type,
-             country, country_code, phone_no, email, website, company_profile,
-             contact_name, contact_designation, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', NOW(), NOW())`,
-          [
-            profileIdOf[i],
-            eventId,
-            c.companyName,
-            c.firstName || c.companyName,
-            c.hallNo || null,
-            c.boothNo || null,
-            c.boothType,
-            c.country,
-            c.countryCode || "+91",
-            c.phone || null,
-            c.email,
-            c.website || null,
-            c.companyProfile,
-            c.firstName || null,
-            c.designation || null
-          ]
-        );
         await connection.query(
           `INSERT INTO mandatory_form_status (exhibitor_profile_id, event_id, form_key, status, completed_at, created_at, updated_at)
            VALUES (?, ?, 'exhibitor-information', 'completed', NOW(), NOW(), NOW())`,

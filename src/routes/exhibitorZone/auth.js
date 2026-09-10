@@ -162,14 +162,17 @@ router.post(
   "/login",
   validate(loginSchema),
   asyncHandler(async (req, res) => {
-    const { email, password } = req.body;
+    const { email, password } = req.body; // `email` may be an email OR a username — see loginSchema
 
-    const [userRows] = await pool.query("SELECT * FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1", [email]);
+    const [userRows] = await pool.query(
+      "SELECT * FROM users WHERE (email = ? OR username = ?) AND deleted_at IS NULL LIMIT 1",
+      [email, email]
+    );
     const user = userRows[0];
 
     if (!user) {
       await verifyPassword(await dummyHashPromise, password).catch(() => false);
-      throw new ApiError(401, "Invalid email or password.");
+      throw new ApiError(401, "Invalid email/username or password.");
     }
 
     if (user.locked_until && new Date(user.locked_until) > new Date()) {
@@ -188,7 +191,7 @@ router.post(
         throw new ApiError(423, `Too many failed attempts. This account is locked for ${LOCKOUT_MINUTES} minutes.`);
       }
       await pool.query("UPDATE users SET login_attempts = ? WHERE id = ?", [attempts, user.id]);
-      throw new ApiError(401, "Invalid email or password.");
+      throw new ApiError(401, "Invalid email/username or password.");
     }
 
     if (!user.is_active) throw new ApiError(401, "This account has been disabled.");

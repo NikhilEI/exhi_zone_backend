@@ -29,8 +29,12 @@ const registerSchema = z.object({
   phone: z.string().trim().max(30).optional().default("")
 });
 
+// `email` here doubles as "email or username" — most legacy-imported
+// exhibitors only have a username, not an email, so this deliberately does
+// NOT require email format. The login route itself matches against either
+// column.
 const loginSchema = z.object({
-  email: z.string().trim().email().max(254),
+  email: z.string().trim().min(1, "Email or username is required.").max(254),
   password: z.string().min(1, "Password is required.")
 });
 

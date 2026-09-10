@@ -260,7 +260,7 @@ CREATE TABLE IF NOT EXISTS `exhibitor_directory_info` (
   `hall_no` varchar(50) DEFAULT NULL,
   `zone` varchar(100) DEFAULT NULL,
   `booth_no` varchar(50) DEFAULT NULL,
-  `booth_type` enum('Raw Space','Shell Space') NOT NULL,
+  `booth_type` enum('Raw Space','Shell Space') DEFAULT NULL COMMENT 'Nullable so a partially-known record (e.g. a legacy import that only has hall/booth) can still be saved — the Booth Design / Fascia Name mandatory forms only appear once this is actually set, whoever sets it.',
   `booth_size` decimal(10,2) DEFAULT NULL,
   `booth_width` decimal(10,2) DEFAULT NULL,
   `booth_depth` decimal(10,2) DEFAULT NULL,
@@ -268,9 +268,9 @@ CREATE TABLE IF NOT EXISTS `exhibitor_directory_info` (
   `country` varchar(100) NOT NULL,
   `country_code` varchar(10) NOT NULL,
   `phone_no` varchar(30) DEFAULT NULL,
-  `email` varchar(255) NOT NULL,
+  `email` varchar(255) DEFAULT NULL COMMENT 'Nullable for the same reason as booth_type — see above.',
   `website` varchar(500) DEFAULT NULL,
-  `company_profile` varchar(400) NOT NULL,
+  `company_profile` varchar(400) DEFAULT NULL COMMENT 'Nullable for the same reason as booth_type — see above.',
   `company_logo_document_id` bigint(20) unsigned DEFAULT NULL,
   `contact_name` varchar(150) DEFAULT NULL,
   `contact_designation` varchar(150) DEFAULT NULL,
@@ -304,6 +304,16 @@ ALTER TABLE `exhibitor_directory_info`
   ADD COLUMN IF NOT EXISTS `contact_phone` varchar(30) DEFAULT NULL AFTER `contact_designation`,
   ADD COLUMN IF NOT EXISTS `contact_email` varchar(254) DEFAULT NULL AFTER `contact_phone`,
   ADD COLUMN IF NOT EXISTS `contact_alternate_email` varchar(254) DEFAULT NULL AFTER `contact_email`;
+
+-- Relaxes booth_type/email/company_profile from NOT NULL to nullable, so a
+-- partially-known record (e.g. imported from a legacy system with only
+-- hall/booth known) can be saved and pre-fill the Exhibitor Information form
+-- with whatever is known, rather than requiring all-or-nothing. Plain
+-- MODIFY COLUMN is naturally idempotent — safe to run again.
+ALTER TABLE `exhibitor_directory_info`
+  MODIFY COLUMN `booth_type` enum('Raw Space','Shell Space') DEFAULT NULL,
+  MODIFY COLUMN `email` varchar(255) DEFAULT NULL,
+  MODIFY COLUMN `company_profile` varchar(400) DEFAULT NULL;
 
 -- Booth Design Submission's actual content and review workflow live in the
 -- generic form_templates/form_submissions system (see forms.js) instead of a
@@ -992,6 +1002,44 @@ CREATE TABLE IF NOT EXISTS `sessions` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+-- Pre-account leads captured by a "reserve your space" style enquiry form —
+-- reviewed by an admin (see routes/exhibitorZone/admin/registrations.js) and
+-- converted into a real exhibitor account (company + login + default pass)
+-- once qualified. Referenced by that route since it was built, but this
+-- table itself was missing from the schema, so the Registrations admin page
+-- 500'd on every load — this restores it. Nothing currently POSTs new rows
+-- into it (no public-facing enquiry form exists yet); the page will load
+-- correctly but show an empty list until one does.
+CREATE TABLE IF NOT EXISTS `space_bookings` (
+  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  `event_id` bigint(20) unsigned DEFAULT NULL,
+  `first_name` varchar(100) NOT NULL,
+  `last_name` varchar(100) NOT NULL,
+  `organisation` varchar(255) NOT NULL,
+  `designation` varchar(150) DEFAULT NULL,
+  `email` varchar(254) NOT NULL,
+  `mobile_no` varchar(30) NOT NULL,
+  `city` varchar(100) DEFAULT NULL,
+  `country` varchar(100) DEFAULT NULL,
+  `learn_about_expo` varchar(255) DEFAULT NULL COMMENT 'How they heard about the expo',
+  `shell_space` varchar(100) DEFAULT NULL COMMENT 'Shell space requirement, free text as captured on the enquiry form',
+  `business_intrest` text DEFAULT NULL COMMENT 'Business interest — column name matches the original enquiry form field',
+  `exhibitor_profile_id` bigint(20) unsigned DEFAULT NULL COMMENT 'Set once converted',
+  `converted_at` datetime DEFAULT NULL,
+  `converted_by` bigint(20) unsigned DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_sb_event` (`event_id`),
+  KEY `idx_sb_profile` (`exhibitor_profile_id`),
+  KEY `idx_sb_converted_by` (`converted_by`),
+  CONSTRAINT `fk_sb_event` FOREIGN KEY (`event_id`) REFERENCES `events` (`id`),
+  CONSTRAINT `fk_sb_profile` FOREIGN KEY (`exhibitor_profile_id`) REFERENCES `exhibitor_event_profiles` (`id`),
+  CONSTRAINT `fk_sb_converted_by` FOREIGN KEY (`converted_by`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
 CREATE TABLE IF NOT EXISTS `sound_noise_guideline_acknowledgement` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `exhibitor_profile_id` bigint(20) unsigned NOT NULL,
@@ -1112,6 +1160,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `uuid` char(36) NOT NULL DEFAULT '',
   `email` varchar(254) NOT NULL,
+  `username` varchar(50) DEFAULT NULL COMMENT 'Optional alternate login identifier — e.g. carried over from a legacy system import. Login accepts either this or email.',
   `email_verified_at` datetime DEFAULT NULL,
   `password_hash` varchar(255) NOT NULL COMMENT 'Argon2id hash — NEVER AES',
   `first_name` varchar(100) NOT NULL,
@@ -1137,9 +1186,15 @@ CREATE TABLE IF NOT EXISTS `users` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_users_uuid` (`uuid`),
   UNIQUE KEY `uq_users_email` (`email`),
+  UNIQUE KEY `uq_users_username` (`username`),
   KEY `idx_users_active` (`is_active`,`deleted_at`),
   KEY `idx_users_locked` (`locked_until`)
 ) ENGINE=InnoDB AUTO_INCREMENT=9 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Idempotent column addition for existing databases.
+ALTER TABLE `users`
+  ADD COLUMN IF NOT EXISTS `username` varchar(50) DEFAULT NULL COMMENT 'Optional alternate login identifier — e.g. carried over from a legacy system import. Login accepts either this or email.' AFTER `email`,
+  ADD UNIQUE KEY IF NOT EXISTS `uq_users_username` (`username`);
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
