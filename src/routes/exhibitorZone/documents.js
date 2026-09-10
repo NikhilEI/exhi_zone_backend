@@ -12,6 +12,10 @@ const router = express.Router();
 
 const ADMIN_ROLES = ["super_admin", "organiser", "finance"];
 
+// These admin-managed document types are one-per-exhibitor — re-uploading
+// requires deleting the existing one first, rather than accumulating copies.
+const SINGLE_INSTANCE_DOC_TYPES = ["proforma_invoice", "invoice", "letter_of_participation", "certificate_of_incorporation"];
+
 router.use(requireAuth, requireEventContext);
 
 async function resolveOwnProfileId(req) {
@@ -46,6 +50,17 @@ router.post(
     } else if (!exhibitorProfileId) {
       fs.unlink(req.file.path, () => {});
       throw new ApiError(400, "exhibitorProfileId is required when an admin uploads on behalf of an exhibitor.");
+    }
+
+    if (SINGLE_INSTANCE_DOC_TYPES.includes(documentType)) {
+      const [existing] = await pool.query(
+        "SELECT id FROM document_uploads WHERE exhibitor_profile_id = ? AND document_type = ? AND deleted_at IS NULL LIMIT 1",
+        [exhibitorProfileId, documentType]
+      );
+      if (existing.length > 0) {
+        fs.unlink(req.file.path, () => {});
+        throw new ApiError(409, `A document of type "${documentType.replace(/_/g, " ")}" is already on file for this exhibitor. Delete the existing one before uploading a new one.`);
+      }
     }
 
     const checksum = await sha256File(req.file.path);

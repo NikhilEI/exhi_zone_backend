@@ -97,14 +97,24 @@ const outdoorSpaceSchema = z.object({
   sqmsRequired: z.coerce.number().positive().max(100000)
 });
 
-// Attaching the design is mandatory regardless of contractor — "No" is
-// disabled in the UI, so attachDesign is always "Yes" in practice.
-const boothDesignSubmissionSchema = z.object({
-  standContractor: z.string().trim().min(1).max(255),
-  attachDesign: z.literal("Yes"),
-  designDocumentId: z.coerce.number().int().positive(),
-  declarationAccepted: z.literal(true)
-});
+// designDocumentId is only required when attachDesign is "Yes" — choosing
+// "No" skips the file attachment requirement entirely.
+const boothDesignSubmissionSchema = z
+  .object({
+    standContractor: z.string().trim().min(1).max(255),
+    attachDesign: z.enum(["Yes", "No"]),
+    designDocumentId: z.coerce.number().int().positive().optional(),
+    declarationAccepted: z.literal(true)
+  })
+  .superRefine((data, ctx) => {
+    if (data.attachDesign === "Yes" && !data.designDocumentId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["designDocumentId"],
+        message: "Please attach your booth design."
+      });
+    }
+  });
 
 const fasciaNameSubmissionSchema = z.object({
   fasciaName: z.string().trim().min(1).max(28)
