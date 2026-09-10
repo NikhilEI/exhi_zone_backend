@@ -30,7 +30,7 @@ function getTransporter() {
 // where a recipient appears only in the envelope RCPT list and not in a visible To/Cc header,
 // so true Bcc copies were never arriving even though the primary `to` copy always did.
 async function sendMail({ to, bcc, subject, text, html }) {
-  const from = process.env.SMTP_FROM || process.env.SMTP_USER || '"Wellness India Expo" <noreply@wellnessindiaexpo.com>';
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER || '"Convergence India Expo" <noreply@convergenceindia.org>';
   const client = getTransporter();
   if (!client) {
     console.log(`SMTP not configured — skipping email "${subject}" to ${to}`);
@@ -57,7 +57,7 @@ async function sendMail({ to, bcc, subject, text, html }) {
 // in this file: an unconfigured SMTP or a send failure never throws, since the mobile/SMS
 // side of the OTP delivery already went out (or was attempted) independently.
 async function sendOtpEmail(to, code, expiresInSeconds) {
-  const from = process.env.SMTP_FROM || process.env.SMTP_USER || '"Wellness India Expo" <noreply@wellnessindiaexpo.com>';
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER || '"Convergence India Expo" <noreply@convergenceindia.org>';
   const client = getTransporter();
   if (!client) {
     console.log(`SMTP not configured — skipping OTP email to ${to}`);
@@ -69,7 +69,7 @@ async function sendOtpEmail(to, code, expiresInSeconds) {
     await client.sendMail({
       from,
       to,
-      subject: "Your Wellness India Expo 2027 verification code",
+      subject: "Your Convergence India Expo 2027 verification code",
       text: `Your OTP is ${code}. It is valid for ${minutes} minutes.`,
       html: `<p>Your OTP is <strong style="font-size:18px;letter-spacing:2px;">${code}</strong>.</p><p>It is valid for ${minutes} minutes.</p>`
     });
@@ -103,7 +103,7 @@ function escapeHtml(value) {
 // "Event Name" always leads the table so the recipient can tell which form this was.
 function buildConfirmationEmail({ firstName, eventName, actionPhrase, fields }) {
   const greeting = `Dear ${firstName},`;
-  const intro = `Thank you for your registration as ${actionPhrase} at Wellness India Expo 2027. A senior executive will contact you shortly and we look forward to welcoming you at the expo.`;
+  const intro = `Thank you for your registration as ${actionPhrase} at Convergence India Expo 2027. A senior executive will contact you shortly and we look forward to welcoming you at the expo.`;
   const rows = [["Event Name", eventName], ...fields.filter(([, value]) => value !== undefined && value !== null)];
 
   const text =
