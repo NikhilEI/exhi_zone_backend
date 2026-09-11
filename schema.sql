@@ -278,6 +278,7 @@ CREATE TABLE IF NOT EXISTS `exhibitor_directory_info` (
   `contact_email` varchar(254) DEFAULT NULL,
   `contact_alternate_email` varchar(254) DEFAULT NULL,
   `status` enum('pending','completed') NOT NULL DEFAULT 'completed',
+  `locked_fields` text DEFAULT NULL COMMENT 'JSON array of column names that were populated by an admin/legacy import (e.g. ["company_name","booth_type"]) and can therefore only be changed by an admin — set once at import time, never expanded afterward. NULL/empty means nothing is locked (the normal case for a self-registered exhibitor).' CHECK (json_valid(`locked_fields`)),
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
@@ -314,6 +315,10 @@ ALTER TABLE `exhibitor_directory_info`
   MODIFY COLUMN `booth_type` enum('Raw Space','Shell Space') DEFAULT NULL,
   MODIFY COLUMN `email` varchar(255) DEFAULT NULL,
   MODIFY COLUMN `company_profile` varchar(400) DEFAULT NULL;
+
+-- Idempotent column addition for existing databases.
+ALTER TABLE `exhibitor_directory_info`
+  ADD COLUMN IF NOT EXISTS `locked_fields` text DEFAULT NULL COMMENT 'JSON array of column names populated by an admin/legacy import — only an admin can change these. NULL means nothing is locked.' AFTER `status`;
 
 -- Booth Design Submission's actual content and review workflow live in the
 -- generic form_templates/form_submissions system (see forms.js) instead of a

@@ -7,7 +7,7 @@ const requireRole = require("../../middleware/requireRole");
 const requireEventContext = require("../../middleware/requireEventContext");
 const requireCompanyAccess = require("../../middleware/requireCompanyAccess");
 const { ApiError } = require("../../middleware/errorHandler");
-const { resolveOwnProfileId } = require("../../utils/exhibitorProfile");
+const { resolveTargetProfileId } = require("../../utils/exhibitorProfile");
 const { notifyUser, notifyAdmins } = require("../../utils/notify");
 const { FORM_SCHEMAS } = require("../../validators/forms");
 const { z } = require("zod");
@@ -106,7 +106,7 @@ router.post(
     const template = templateRows[0];
     if (!template) throw new ApiError(404, "Form template not found.");
 
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
     const dataJson = JSON.stringify(parsed.data);
     const initialStatus = template.requires_approval ? "submitted" : "approved";
 
@@ -164,7 +164,10 @@ router.post(
 router.get(
   "/submissions",
   asyncHandler(async (req, res) => {
-    if (ADMIN_ROLES.includes(req.user.role)) {
+    // An admin editing on behalf of a specific exhibitor (?profileId=...,
+    // e.g. from the mandatory-forms pages in admin mode) wants that one
+    // exhibitor's submissions, not the cross-company review list below.
+    if (ADMIN_ROLES.includes(req.user.role) && !req.query.profileId) {
       const params = [req.user.eventId];
       let filter = "";
       if (req.query.status) {
@@ -189,7 +192,7 @@ router.get(
       return res.json({ submissions: rows.map((r) => ({ ...r, data: JSON.parse(r.data) })) });
     }
 
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
     const [rows] = await pool.query(
       `SELECT fs.*, ft.name AS template_name, ft.slug AS template_slug FROM form_submissions fs
        JOIN form_templates ft ON ft.id = fs.form_template_id

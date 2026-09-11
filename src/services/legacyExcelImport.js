@@ -22,6 +22,11 @@
 //     row; the rest get company/profile/booth/product/order data with no
 //     login until an admin adds a real email later.
 //   - order.status "0" in the legacy sheet = unpaid/placed.
+//   - Every exhibitor_directory_info field the import actually writes a
+//     value for is recorded in that row's locked_fields — a regular
+//     exhibitor can no longer edit those from their own Exhibitor
+//     Information form (only an admin can), while anything left blank by
+//     the import stays open for them to fill in themselves.
 
 const crypto = require("crypto");
 const XLSX = require("xlsx");
@@ -72,6 +77,32 @@ const COMPANY_ALIASES = {
 function resolveCompanyKey(name) {
   const k = key(name);
   return COMPANY_ALIASES[k] || k;
+}
+
+// Which exhibitor_directory_info columns this row's import actually supplied
+// a value for — these get locked (see locked_fields on that table) so a
+// regular exhibitor can't overwrite admin/legacy-sourced data, while any
+// column NOT in this list (blank in the sheet) stays open for them to fill
+// in themselves. Mirrors LOCKABLE_INFO_FIELDS in routes/.../mandatoryForms.js.
+function computeLockedFields(c) {
+  const candidates = {
+    company_name: c.companyName,
+    brand_name: c.firstName || c.companyName,
+    hall_no: c.hallNo,
+    booth_no: c.boothNo,
+    booth_type: c.boothType,
+    country: c.country,
+    country_code: c.countryCode || "+91",
+    phone_no: c.phone,
+    email: c.email,
+    website: c.website,
+    company_profile: c.companyProfile,
+    contact_name: c.firstName,
+    contact_designation: c.designation
+  };
+  return Object.entries(candidates)
+    .filter(([, value]) => Boolean(value))
+    .map(([field]) => field);
 }
 
 // ------------------------------------------------------------- planImport --
@@ -491,8 +522,8 @@ async function applyImport(pool, plan) {
         `INSERT INTO exhibitor_directory_info
           (exhibitor_profile_id, event_id, company_name, brand_name, hall_no, booth_no, booth_type,
            country, country_code, phone_no, email, website, company_profile,
-           contact_name, contact_designation, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+           contact_name, contact_designation, status, locked_fields, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
         [
           profileIdOf[i],
           eventId,
@@ -509,7 +540,8 @@ async function applyImport(pool, plan) {
           c.companyProfile || null,
           c.firstName || null,
           c.designation || null,
-          c.fullyComplete ? "completed" : "pending"
+          c.fullyComplete ? "completed" : "pending",
+          JSON.stringify(computeLockedFields(c))
         ]
       );
       if (c.fullyComplete) {

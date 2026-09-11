@@ -6,7 +6,7 @@ const requireRole = require("../../middleware/requireRole");
 const requireEventContext = require("../../middleware/requireEventContext");
 const validate = require("../../middleware/validate");
 const { ApiError } = require("../../middleware/errorHandler");
-const { resolveOwnProfileId } = require("../../utils/exhibitorProfile");
+const { resolveTargetProfileId, isAdminOverride } = require("../../utils/exhibitorProfile");
 const { notifyAdmins } = require("../../utils/notify");
 const {
   exhibitorInformationSchema,
@@ -24,6 +24,26 @@ const router = express.Router();
 const ADMIN_ROLES = ["super_admin", "organiser"];
 
 router.use(requireAuth, requireEventContext);
+
+// exhibitor_directory_info columns an admin/legacy import can lock (see
+// locked_fields on that table) — deliberately excludes company_logo_document_id,
+// contact_phone, and contact_alternate_email, which are never populated by an
+// import and should always stay editable by the exhibitor.
+const LOCKABLE_INFO_FIELDS = [
+  { db: "company_name", body: "companyName" },
+  { db: "brand_name", body: "brandName" },
+  { db: "hall_no", body: "hallNo" },
+  { db: "booth_no", body: "boothNo" },
+  { db: "booth_type", body: "boothType" },
+  { db: "country", body: "country" },
+  { db: "country_code", body: "countryCode" },
+  { db: "phone_no", body: "phoneNo" },
+  { db: "email", body: "email" },
+  { db: "website", body: "website" },
+  { db: "company_profile", body: "companyProfile" },
+  { db: "contact_name", body: "contactName" },
+  { db: "contact_designation", body: "contactDesignation" }
+];
 
 async function upsertFormStatus(connection, { profileId, eventId, formKey, status }) {
   await connection.query(
@@ -72,7 +92,7 @@ const REGISTRY_SELECT = `
 router.get(
   "/",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
     const [rows] = await pool.query(REGISTRY_SELECT, [profileId, profileId, profileId, req.user.eventId]);
     res.json({ forms: rows });
   })
@@ -218,12 +238,17 @@ router.get(
 router.get(
   "/exhibitor-information",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
     const [rows] = await pool.query(
       "SELECT * FROM exhibitor_directory_info WHERE exhibitor_profile_id = ? AND event_id = ? LIMIT 1",
       [profileId, req.user.eventId]
     );
-    res.json({ info: rows[0] || null });
+    const info = rows[0] || null;
+    // Admin editing on someone's behalf isn't shown any locks — only a
+    // regular exhibitor viewing their own form needs to know which fields
+    // they can't touch.
+    if (info) info.locked_fields = isAdminOverride(req) ? [] : JSON.parse(info.locked_fields || "[]");
+    res.json({ info });
   })
 );
 
@@ -231,8 +256,25 @@ router.patch(
   "/exhibitor-information",
   validate(exhibitorInformationSchema),
   asyncHandler(async (req, res) => {
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
     const b = req.body;
+
+    // Enforce per-field locks set by an admin/legacy import: a regular
+    // exhibitor's submitted value for a locked field is silently replaced
+    // with what's already on file, no matter what the client sent — this
+    // can't be bypassed by crafting a raw request, only an admin using the
+    // ?profileId= override is exempt.
+    if (!isAdminOverride(req)) {
+      const [existingRows] = await pool.query(
+        "SELECT * FROM exhibitor_directory_info WHERE exhibitor_profile_id = ? AND event_id = ? LIMIT 1",
+        [profileId, req.user.eventId]
+      );
+      const existing = existingRows[0];
+      const locked = existing && existing.locked_fields ? JSON.parse(existing.locked_fields) : [];
+      for (const field of LOCKABLE_INFO_FIELDS) {
+        if (locked.includes(field.db)) b[field.body] = existing[field.db];
+      }
+    }
 
     const [docRows] = await pool.query(
       "SELECT id FROM document_uploads WHERE id = ? AND exhibitor_profile_id = ? AND deleted_at IS NULL LIMIT 1",
@@ -318,7 +360,7 @@ router.patch(
 router.get(
   "/product-information",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
     const [rows] = await pool.query(
       `SELECT epc.subcategory_id, epc.other_specification, psc.name AS subcategory_name, psc.category_id
        FROM exhibitor_product_categories epc
@@ -334,7 +376,7 @@ router.patch(
   "/product-information",
   validate(productInformationSchema),
   asyncHandler(async (req, res) => {
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
     const { subcategoryIds, otherSpecification } = req.body;
 
     const [validRows] = await pool.query(
@@ -406,7 +448,7 @@ router.get(
 router.get(
   "/principal-agent-information",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
 
     const [records] = await pool.query(
       `SELECT r.id, r.type, r.company_name, r.website, r.country_name, r.country_code,
@@ -431,7 +473,7 @@ router.post(
   "/principal-agent-information/records",
   validate(principalAgentRecordSchema),
   asyncHandler(async (req, res) => {
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
     const b = req.body;
 
     if (b.sectorId) {
@@ -495,7 +537,7 @@ router.post(
 router.delete(
   "/principal-agent-information/records/:id",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
     const recordId = Number(req.params.id);
     if (!Number.isInteger(recordId) || recordId <= 0) throw new ApiError(400, "Invalid record id.");
 
@@ -545,7 +587,7 @@ router.patch(
   "/principal-agent-information/declaration",
   validate(principalAgentDeclarationSchema),
   asyncHandler(async (req, res) => {
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
     const { noPrincipalAgent } = req.body;
 
     const connection = await pool.getConnection();
@@ -590,7 +632,7 @@ router.patch(
 router.get(
   "/sound-noise-guidelines",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
     const [rows] = await pool.query(
       "SELECT acknowledged, acknowledged_at, guideline_version FROM sound_noise_guideline_acknowledgement WHERE exhibitor_profile_id = ? AND event_id = ? LIMIT 1",
       [profileId, req.user.eventId]
@@ -603,7 +645,7 @@ router.patch(
   "/sound-noise-guidelines",
   validate(soundNoiseAcknowledgementSchema),
   asyncHandler(async (req, res) => {
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
 
     const connection = await pool.getConnection();
     try {
@@ -645,7 +687,7 @@ router.patch(
 router.get(
   "/badges-for-exhibitors",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
     const [records] = await pool.query(
       `SELECT id, badge_id, full_name, designation, company_name, country, country_code, mobile_no, email, created_at
        FROM badge_records WHERE exhibitor_profile_id = ? AND event_id = ? ORDER BY created_at`,
@@ -661,7 +703,7 @@ router.post(
   "/badges-for-exhibitors/records",
   validate(badgeRecordSchema),
   asyncHandler(async (req, res) => {
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
     const b = req.body;
 
     const connection = await pool.getConnection();
@@ -708,7 +750,7 @@ router.post(
 router.delete(
   "/badges-for-exhibitors/records/:id",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveOwnProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req);
     const recordId = Number(req.params.id);
     if (!Number.isInteger(recordId) || recordId <= 0) throw new ApiError(400, "Invalid record id.");
 
