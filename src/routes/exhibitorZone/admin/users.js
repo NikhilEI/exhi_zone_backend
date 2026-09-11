@@ -26,7 +26,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
       `SELECT u.id, u.uuid, u.email, u.first_name, u.last_name, u.is_active, u.last_login_at, r.name AS role,
-              uer.enabled_modules
+              MAX(uer.enabled_modules) AS enabled_modules
        FROM users u
        JOIN user_event_roles uer ON uer.user_id = u.id
        JOIN roles r ON r.id = uer.role_id
