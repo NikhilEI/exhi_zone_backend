@@ -129,6 +129,8 @@ CREATE TABLE IF NOT EXISTS `companies` (
   `country` varchar(100) NOT NULL DEFAULT 'India',
   `phone` varchar(30) DEFAULT NULL,
   `email` varchar(254) DEFAULT NULL,
+  `msme_registration_number` varchar(50) DEFAULT NULL COMMENT 'e.g. UDYAM-DL-09-0002610 — captured once, reused on every generated invoice for this company.',
+  `gst_state_code` varchar(2) DEFAULT NULL COMMENT 'GST state code, e.g. "33" for Tamil Nadu — combined with `state` for invoice display as "Tamil Nadu-33".',
   `is_verified` tinyint(1) NOT NULL DEFAULT 0,
   `verified_at` datetime DEFAULT NULL,
   `verified_by` bigint(20) unsigned DEFAULT NULL,
@@ -178,6 +180,44 @@ CREATE TABLE IF NOT EXISTS `document_uploads` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+-- One row per document generated via the admin Document Generator (Proforma
+-- Invoice, and future types). `data` is a full immutable snapshot of every
+-- field used to render the PDF — mirrors how `invoices.billing_name`/
+-- `billing_address` already snapshot rather than join live, so a historical
+-- document stays byte-identical even if the exhibitor's profile changes
+-- later. `pdf_document_upload_id` points at the actual rendered file, stored
+-- as a normal `document_uploads` row so it surfaces in the existing admin
+-- and exhibitor Documents pages with no extra work.
+CREATE TABLE IF NOT EXISTS `generated_documents` (
+  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  `uuid` char(36) NOT NULL DEFAULT '',
+  `event_id` bigint(20) unsigned NOT NULL,
+  `exhibitor_profile_id` bigint(20) unsigned NOT NULL,
+  `document_type` varchar(50) NOT NULL COMMENT 'Matches document_uploads.document_type, e.g. proforma_invoice.',
+  `document_number` varchar(50) DEFAULT NULL COMMENT 'Assigned on first finalize, e.g. CI/26-27/P/38. Re-finalizing keeps the same number.',
+  `sequence_no` int(10) unsigned DEFAULT NULL COMMENT 'Per (event_id, document_type) running sequence, assigned on first finalize.',
+  `status` enum('draft','finalized','void') NOT NULL DEFAULT 'draft',
+  `data` longtext NOT NULL COMMENT 'Full JSON snapshot of every field used to render the PDF.' CHECK (json_valid(`data`)),
+  `pdf_document_upload_id` bigint(20) unsigned DEFAULT NULL,
+  `version` int(10) unsigned NOT NULL DEFAULT 1,
+  `created_by` bigint(20) unsigned DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `finalized_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_gd_uuid` (`uuid`),
+  UNIQUE KEY `uq_gd_sequence` (`event_id`,`document_type`,`sequence_no`),
+  KEY `idx_gd_event` (`event_id`),
+  KEY `idx_gd_profile` (`exhibitor_profile_id`),
+  KEY `idx_gd_type` (`event_id`,`document_type`),
+  KEY `idx_gd_pdf` (`pdf_document_upload_id`),
+  CONSTRAINT `fk_gd_event` FOREIGN KEY (`event_id`) REFERENCES `events` (`id`),
+  CONSTRAINT `fk_gd_profile` FOREIGN KEY (`exhibitor_profile_id`) REFERENCES `exhibitor_event_profiles` (`id`),
+  CONSTRAINT `fk_gd_pdf` FOREIGN KEY (`pdf_document_upload_id`) REFERENCES `document_uploads` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
 CREATE TABLE IF NOT EXISTS `event_copy_log` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `source_event_id` bigint(20) unsigned NOT NULL,
@@ -218,6 +258,7 @@ CREATE TABLE IF NOT EXISTS `events` (
   `name` varchar(255) NOT NULL,
   `slug` varchar(100) NOT NULL COMMENT 'URL-friendly identifier',
   `edition` varchar(50) DEFAULT NULL COMMENT 'e.g. 2024, 2025-Q1',
+  `short_code` varchar(10) DEFAULT NULL COMMENT 'e.g. "CI" for Convergence India — used in generated document numbers like CI/26-27/P/38.',
   `tagline` varchar(500) DEFAULT NULL,
   `venue_name` varchar(255) DEFAULT NULL,
   `venue_address` text DEFAULT NULL,
@@ -1213,6 +1254,14 @@ ALTER TABLE `user_event_roles`
 INSERT IGNORE INTO `roles` (`name`, `label`, `description`, `is_system`) VALUES
   ('operations', 'Operations', 'Restricted admin access — modules granted individually per account', 1),
   ('sales', 'Sales', 'Restricted admin access — modules granted individually per account', 1);
+
+-- Idempotent column additions for existing databases — see companies/events above.
+ALTER TABLE `companies`
+  ADD COLUMN IF NOT EXISTS `msme_registration_number` varchar(50) DEFAULT NULL COMMENT 'e.g. UDYAM-DL-09-0002610 — captured once, reused on every generated invoice for this company.' AFTER `email`,
+  ADD COLUMN IF NOT EXISTS `gst_state_code` varchar(2) DEFAULT NULL COMMENT 'GST state code, e.g. "33" for Tamil Nadu — combined with `state` for invoice display as "Tamil Nadu-33".' AFTER `msme_registration_number`;
+
+ALTER TABLE `events`
+  ADD COLUMN IF NOT EXISTS `short_code` varchar(10) DEFAULT NULL COMMENT 'e.g. "CI" for Convergence India — used in generated document numbers like CI/26-27/P/38.' AFTER `edition`;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 

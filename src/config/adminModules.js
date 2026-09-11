@@ -21,7 +21,8 @@ const ADMIN_MODULES = [
   { key: "forms", label: "Form Reviews" },
   { key: "documents", label: "Exhibitor Documents" },
   { key: "notifications", label: "Send Notification" },
-  { key: "exports", label: "Export Data" }
+  { key: "exports", label: "Export Data" },
+  { key: "document-generator", label: "Generate Documents" }
 ];
 
 const ADMIN_MODULE_KEYS = ADMIN_MODULES.map((m) => m.key);

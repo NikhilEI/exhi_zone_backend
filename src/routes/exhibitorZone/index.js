@@ -24,6 +24,7 @@ router.use("/admin/users", require("./admin/users"));
 router.use("/admin/registrations", require("./admin/registrations"));
 router.use("/admin/notifications", require("./admin/notifications"));
 router.use("/admin/exports", require("./admin/exports"));
+router.use("/admin/generated-documents", require("./admin/generatedDocuments"));
 router.use("/admin/legacy-import", require("./admin/legacyImport"));
 
 module.exports = router;
