@@ -7,10 +7,12 @@ const requireRole = require("../../middleware/requireRole");
 const requireEventContext = require("../../middleware/requireEventContext");
 const requireCompanyAccess = require("../../middleware/requireCompanyAccess");
 const { ApiError } = require("../../middleware/errorHandler");
-const { resolveTargetProfileId } = require("../../utils/exhibitorProfile");
+const { resolveTargetProfileId, isAdminOverride } = require("../../utils/exhibitorProfile");
 const { notifyUser, notifyAdmins } = require("../../utils/notify");
 const { FORM_SCHEMAS } = require("../../validators/forms");
 const { requireModule, hasModuleAccess } = require("../../middleware/requireModule");
+const { getFormFields } = require("../../config/mandatoryFormFields");
+const { getLockedFieldKeys, applyFieldLocks } = require("../../utils/mandatoryFormLocks");
 const { z } = require("zod");
 
 const router = express.Router();
@@ -110,7 +112,6 @@ router.post(
     if (!template) throw new ApiError(404, "Form template not found.");
 
     const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
-    const dataJson = JSON.stringify(parsed.data);
     const initialStatus = template.requires_approval ? "submitted" : "approved";
 
     const [existingRows] = await pool.query(
@@ -118,6 +119,18 @@ router.post(
       [template.id, req.user.eventId, profileId]
     );
     const existing = existingRows[0];
+
+    // Only mandatory forms with a registered field list (booth-design-submission,
+    // fascia-name-submission) participate in field locking — every other
+    // slug this generic handler also serves (translators, av-equipment,
+    // etc.) is unaffected.
+    let data = parsed.data;
+    const lockableFields = getFormFields(req.params.slug);
+    if (lockableFields && !isAdminOverride(req)) {
+      const { locked } = await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: req.params.slug });
+      data = applyFieldLocks(existing ? JSON.parse(existing.data) : null, data, locked, lockableFields);
+    }
+    const dataJson = JSON.stringify(data);
 
     if (existing && !template.allow_multiple) {
       // Exhibitors can always reopen and resubmit their own record, regardless
@@ -204,7 +217,22 @@ router.get(
        ORDER BY fs.created_at DESC`,
       [req.user.eventId, profileId]
     );
-    res.json({ submissions: rows.map((r) => ({ ...r, data: JSON.parse(r.data) })) });
+    // Only slugs with a registered field list (booth-design-submission,
+    // fascia-name-submission) ever carry locks — everything else in this
+    // generic table gets an empty array.
+    const admin = isAdminOverride(req);
+    const submissions = await Promise.all(
+      rows.map(async (r) => {
+        const fields = getFormFields(r.template_slug);
+        let lockedFields = [];
+        if (fields && !admin) {
+          const { locked } = await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: r.template_slug });
+          lockedFields = Array.from(locked);
+        }
+        return { ...r, data: JSON.parse(r.data), lockedFields };
+      })
+    );
+    res.json({ submissions });
   })
 );
 

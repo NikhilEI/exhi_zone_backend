@@ -319,7 +319,6 @@ CREATE TABLE IF NOT EXISTS `exhibitor_directory_info` (
   `contact_email` varchar(254) DEFAULT NULL,
   `contact_alternate_email` varchar(254) DEFAULT NULL,
   `status` enum('pending','completed') NOT NULL DEFAULT 'completed',
-  `locked_fields` text DEFAULT NULL COMMENT 'JSON array of column names that were populated by an admin/legacy import (e.g. ["company_name","booth_type"]) and can therefore only be changed by an admin — set once at import time, never expanded afterward. NULL/empty means nothing is locked (the normal case for a self-registered exhibitor).' CHECK (json_valid(`locked_fields`)),
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
@@ -357,9 +356,13 @@ ALTER TABLE `exhibitor_directory_info`
   MODIFY COLUMN `email` varchar(255) DEFAULT NULL,
   MODIFY COLUMN `company_profile` varchar(400) DEFAULT NULL;
 
--- Idempotent column addition for existing databases.
+-- `locked_fields` (auto-set at import time) has been replaced by the
+-- `mandatory_form_field_locks` table below, which covers all 7 mandatory
+-- forms with admin-controlled per-exhibitor AND global locks instead of a
+-- single auto-populated column on just this one table. Idempotent for
+-- existing databases that still have the old column.
 ALTER TABLE `exhibitor_directory_info`
-  ADD COLUMN IF NOT EXISTS `locked_fields` text DEFAULT NULL COMMENT 'JSON array of column names populated by an admin/legacy import — only an admin can change these. NULL means nothing is locked.' AFTER `status`;
+  DROP COLUMN IF EXISTS `locked_fields`;
 
 -- Booth Design Submission's actual content and review workflow live in the
 -- generic form_templates/form_submissions system (see forms.js) instead of a
@@ -568,6 +571,35 @@ CREATE TABLE IF NOT EXISTS `mandatory_form_status` (
   CONSTRAINT `fk_mfs_event` FOREIGN KEY (`event_id`) REFERENCES `events` (`id`),
   CONSTRAINT `fk_mfs_profile` FOREIGN KEY (`exhibitor_profile_id`) REFERENCES `exhibitor_event_profiles` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=24 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+-- Admin-controlled field locking across all 7 mandatory forms (see
+-- src/config/mandatoryFormFields.js for each form's lockable field/action
+-- keys). Replaces the old exhibitor_directory_info.locked_fields column,
+-- which only covered Exhibitor Information and only auto-locked from
+-- import — everything here is a deliberate admin action instead, and
+-- covers every mandatory form.
+--
+-- `exhibitor_profile_id` = 0 is a reserved sentinel meaning GLOBAL (locked
+-- for every exhibitor in the event) rather than one specific company —
+-- deliberately not NULL, since MySQL's unique-key semantics treat every
+-- NULL as distinct and would silently allow duplicate "global" rows for
+-- the same field. Because of that sentinel, this column intentionally has
+-- no FK to exhibitor_event_profiles (id 0 never exists there).
+CREATE TABLE IF NOT EXISTS `mandatory_form_field_locks` (
+  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  `event_id` bigint(20) unsigned NOT NULL,
+  `exhibitor_profile_id` bigint(20) unsigned NOT NULL COMMENT '0 = global (applies to every exhibitor in the event)',
+  `form_key` varchar(100) NOT NULL,
+  `field_key` varchar(100) NOT NULL,
+  `locked_by` bigint(20) unsigned DEFAULT NULL,
+  `locked_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_mffl` (`event_id`,`exhibitor_profile_id`,`form_key`,`field_key`),
+  KEY `idx_mffl_lookup` (`event_id`,`form_key`,`exhibitor_profile_id`),
+  CONSTRAINT `fk_mffl_event` FOREIGN KEY (`event_id`) REFERENCES `events` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;

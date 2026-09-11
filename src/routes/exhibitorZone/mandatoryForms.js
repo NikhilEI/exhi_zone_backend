@@ -9,6 +9,8 @@ const { ApiError } = require("../../middleware/errorHandler");
 const { resolveTargetProfileId, isAdminOverride } = require("../../utils/exhibitorProfile");
 const { notifyAdmins } = require("../../utils/notify");
 const { requireModule } = require("../../middleware/requireModule");
+const { getFormFields } = require("../../config/mandatoryFormFields");
+const { getLockedFieldKeys, applyFieldLocks, assertActionUnlocked } = require("../../utils/mandatoryFormLocks");
 const {
   exhibitorInformationSchema,
   productInformationSchema,
@@ -25,26 +27,6 @@ const router = express.Router();
 const ADMIN_ROLES = ["super_admin", "organiser", "operations", "sales"];
 
 router.use(requireAuth, requireEventContext);
-
-// exhibitor_directory_info columns an admin/legacy import can lock (see
-// locked_fields on that table) — deliberately excludes company_logo_document_id,
-// contact_phone, and contact_alternate_email, which are never populated by an
-// import and should always stay editable by the exhibitor.
-const LOCKABLE_INFO_FIELDS = [
-  { db: "company_name", body: "companyName" },
-  { db: "brand_name", body: "brandName" },
-  { db: "hall_no", body: "hallNo" },
-  { db: "booth_no", body: "boothNo" },
-  { db: "booth_type", body: "boothType" },
-  { db: "country", body: "country" },
-  { db: "country_code", body: "countryCode" },
-  { db: "phone_no", body: "phoneNo" },
-  { db: "email", body: "email" },
-  { db: "website", body: "website" },
-  { db: "company_profile", body: "companyProfile" },
-  { db: "contact_name", body: "contactName" },
-  { db: "contact_designation", body: "contactDesignation" }
-];
 
 async function upsertFormStatus(connection, { profileId, eventId, formKey, status }) {
   await connection.query(
@@ -252,7 +234,12 @@ router.get(
     // Admin editing on someone's behalf isn't shown any locks — only a
     // regular exhibitor viewing their own form needs to know which fields
     // they can't touch.
-    if (info) info.locked_fields = isAdminOverride(req) ? [] : JSON.parse(info.locked_fields || "[]");
+    if (info) {
+      const { locked } = isAdminOverride(req)
+        ? { locked: new Set() }
+        : await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: "exhibitor-information" });
+      info.locked_fields = Array.from(locked);
+    }
     res.json({ info });
   })
 );
@@ -262,23 +249,19 @@ router.patch(
   validate(exhibitorInformationSchema),
   asyncHandler(async (req, res) => {
     const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
-    const b = req.body;
+    let b = req.body;
 
-    // Enforce per-field locks set by an admin/legacy import: a regular
-    // exhibitor's submitted value for a locked field is silently replaced
-    // with what's already on file, no matter what the client sent — this
-    // can't be bypassed by crafting a raw request, only an admin using the
-    // ?profileId= override is exempt.
+    // Enforce admin-set field locks: a regular exhibitor's submitted value
+    // for a locked field is silently replaced with what's already on file,
+    // no matter what the client sent — this can't be bypassed by crafting a
+    // raw request, only an admin using the ?profileId= override is exempt.
     if (!isAdminOverride(req)) {
       const [existingRows] = await pool.query(
         "SELECT * FROM exhibitor_directory_info WHERE exhibitor_profile_id = ? AND event_id = ? LIMIT 1",
         [profileId, req.user.eventId]
       );
-      const existing = existingRows[0];
-      const locked = existing && existing.locked_fields ? JSON.parse(existing.locked_fields) : [];
-      for (const field of LOCKABLE_INFO_FIELDS) {
-        if (locked.includes(field.db)) b[field.body] = existing[field.db];
-      }
+      const { locked } = await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: "exhibitor-information" });
+      b = applyFieldLocks(existingRows[0], b, locked, getFormFields("exhibitor-information"));
     }
 
     const [docRows] = await pool.query(
@@ -373,7 +356,10 @@ router.get(
        WHERE epc.exhibitor_profile_id = ? AND epc.event_id = ?`,
       [profileId, req.user.eventId]
     );
-    res.json({ selections: rows });
+    const { locked } = isAdminOverride(req)
+      ? { locked: new Set() }
+      : await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: "product-information" });
+    res.json({ selections: rows, lockedFields: Array.from(locked) });
   })
 );
 
@@ -383,6 +369,11 @@ router.patch(
   asyncHandler(async (req, res) => {
     const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const { subcategoryIds, otherSpecification } = req.body;
+
+    if (!isAdminOverride(req)) {
+      const { locked } = await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: "product-information" });
+      assertActionUnlocked(locked, "selections");
+    }
 
     const [validRows] = await pool.query(
       `SELECT id, name FROM product_subcategories WHERE id IN (${subcategoryIds.map(() => "?").join(",")})`,
@@ -470,7 +461,15 @@ router.get(
       [profileId, req.user.eventId]
     );
 
-    res.json({ records, noPrincipalAgent: metaRows.length > 0 ? !!metaRows[0].no_principal_agent : false });
+    const { locked } = isAdminOverride(req)
+      ? { locked: new Set() }
+      : await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: "principal-agent-information" });
+
+    res.json({
+      records,
+      noPrincipalAgent: metaRows.length > 0 ? !!metaRows[0].no_principal_agent : false,
+      lockedFields: Array.from(locked)
+    });
   })
 );
 
@@ -480,6 +479,11 @@ router.post(
   asyncHandler(async (req, res) => {
     const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const b = req.body;
+
+    if (!isAdminOverride(req)) {
+      const { locked } = await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: "principal-agent-information" });
+      assertActionUnlocked(locked, "records");
+    }
 
     if (b.sectorId) {
       const [sectorRows] = await pool.query("SELECT id FROM principal_agent_sectors WHERE id = ?", [b.sectorId]);
@@ -546,6 +550,11 @@ router.delete(
     const recordId = Number(req.params.id);
     if (!Number.isInteger(recordId) || recordId <= 0) throw new ApiError(400, "Invalid record id.");
 
+    if (!isAdminOverride(req)) {
+      const { locked } = await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: "principal-agent-information" });
+      assertActionUnlocked(locked, "records");
+    }
+
     const connection = await pool.getConnection();
     try {
       await connection.beginTransaction();
@@ -595,6 +604,11 @@ router.patch(
     const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const { noPrincipalAgent } = req.body;
 
+    if (!isAdminOverride(req)) {
+      const { locked } = await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: "principal-agent-information" });
+      assertActionUnlocked(locked, "declaration");
+    }
+
     const connection = await pool.getConnection();
     try {
       await connection.beginTransaction();
@@ -642,7 +656,10 @@ router.get(
       "SELECT acknowledged, acknowledged_at, guideline_version FROM sound_noise_guideline_acknowledgement WHERE exhibitor_profile_id = ? AND event_id = ? LIMIT 1",
       [profileId, req.user.eventId]
     );
-    res.json({ acknowledgement: rows[0] || null });
+    const { locked } = isAdminOverride(req)
+      ? { locked: new Set() }
+      : await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: "sound-noise-guidelines" });
+    res.json({ acknowledgement: rows[0] || null, lockedFields: Array.from(locked) });
   })
 );
 
@@ -651,6 +668,11 @@ router.patch(
   validate(soundNoiseAcknowledgementSchema),
   asyncHandler(async (req, res) => {
     const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
+
+    if (!isAdminOverride(req)) {
+      const { locked } = await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: "sound-noise-guidelines" });
+      assertActionUnlocked(locked, "acknowledged");
+    }
 
     const connection = await pool.getConnection();
     try {
@@ -698,7 +720,10 @@ router.get(
        FROM badge_records WHERE exhibitor_profile_id = ? AND event_id = ? ORDER BY created_at`,
       [profileId, req.user.eventId]
     );
-    res.json({ records });
+    const { locked } = isAdminOverride(req)
+      ? { locked: new Set() }
+      : await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: "badges-for-exhibitors" });
+    res.json({ records, lockedFields: Array.from(locked) });
   })
 );
 
@@ -710,6 +735,11 @@ router.post(
   asyncHandler(async (req, res) => {
     const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const b = req.body;
+
+    if (!isAdminOverride(req)) {
+      const { locked } = await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: "badges-for-exhibitors" });
+      assertActionUnlocked(locked, "records");
+    }
 
     const connection = await pool.getConnection();
     try {
@@ -758,6 +788,11 @@ router.delete(
     const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const recordId = Number(req.params.id);
     if (!Number.isInteger(recordId) || recordId <= 0) throw new ApiError(400, "Invalid record id.");
+
+    if (!isAdminOverride(req)) {
+      const { locked } = await getLockedFieldKeys(pool, { profileId, eventId: req.user.eventId, formKey: "badges-for-exhibitors" });
+      assertActionUnlocked(locked, "records");
+    }
 
     const connection = await pool.getConnection();
     try {
