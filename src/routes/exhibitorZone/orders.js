@@ -10,10 +10,11 @@ const { ApiError } = require("../../middleware/errorHandler");
 const { resolveOwnProfileId } = require("../../utils/exhibitorProfile");
 const { notifyUser } = require("../../utils/notify");
 const { updatePaymentStatusSchema } = require("../../validators/order");
+const { requireModule, hasModuleAccess } = require("../../middleware/requireModule");
 
 const router = express.Router();
 
-const ADMIN_ROLES = ["super_admin", "organiser", "finance"];
+const ADMIN_ROLES = ["super_admin", "organiser", "finance", "operations", "sales"];
 
 router.use(requireAuth, requireEventContext);
 
@@ -21,6 +22,7 @@ router.get(
   "/",
   asyncHandler(async (req, res) => {
     if (ADMIN_ROLES.includes(req.user.role)) {
+      if (!hasModuleAccess(req, "orders")) throw new ApiError(403, "Your account does not have access to this module.");
       const [rows] = await pool.query(
         `SELECT o.*, c.display_name AS company_name
          FROM orders o
@@ -51,6 +53,7 @@ router.get(
     );
     return rows[0] ? rows[0].company_id : null;
   }),
+  requireModule("orders"),
   asyncHandler(async (req, res) => {
     const [orderRows] = await pool.query("SELECT * FROM orders WHERE id = ? AND event_id = ? LIMIT 1", [
       req.params.id,
@@ -68,6 +71,7 @@ router.get(
 router.patch(
   "/:id/payment-status",
   requireRole(...ADMIN_ROLES),
+  requireModule("orders"),
   validate(updatePaymentStatusSchema),
   asyncHandler(async (req, res) => {
     const { paymentStatus, amountPaid } = req.body;

@@ -8,12 +8,13 @@ const validate = require("../../../middleware/validate");
 const { ApiError } = require("../../../middleware/errorHandler");
 const { notifyUser } = require("../../../utils/notify");
 const { sendNotificationSchema } = require("../../../validators/notification");
+const { requireModule } = require("../../../middleware/requireModule");
 
 const router = express.Router();
 
-const ADMIN_ROLES = ["super_admin", "organiser"];
+const ADMIN_ROLES = ["super_admin", "organiser", "operations", "sales"];
 
-router.use(requireAuth, requireEventContext, requireRole(...ADMIN_ROLES));
+router.use(requireAuth, requireEventContext, requireRole(...ADMIN_ROLES), requireModule("notifications"));
 
 router.post(
   "/send",

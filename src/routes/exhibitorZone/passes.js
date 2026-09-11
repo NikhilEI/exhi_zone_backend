@@ -11,10 +11,11 @@ const validate = require("../../middleware/validate");
 const { ApiError } = require("../../middleware/errorHandler");
 const { resolveOwnProfileId } = require("../../utils/exhibitorProfile");
 const { createAllocationSchema, issuePassSchema, voidPassSchema } = require("../../validators/pass");
+const { requireModule } = require("../../middleware/requireModule");
 
 const router = express.Router();
 
-const ADMIN_ROLES = ["super_admin", "organiser"];
+const ADMIN_ROLES = ["super_admin", "organiser", "operations", "sales"];
 // Who may call POST /passes/issue — the doc's flagged bug was that this route
 // had NO role guard at all; this is the fix (plus the ownership check below).
 const ISSUE_ROLES = ["super_admin", "organiser", "exhibitor_admin"];
@@ -35,6 +36,7 @@ router.get(
 router.post(
   "/allocations",
   requireRole(...ADMIN_ROLES),
+  requireModule("passes"),
   validate(createAllocationSchema),
   asyncHandler(async (req, res) => {
     const { exhibitorProfileId, passTypeId, allocatedQty, notes } = req.body;
@@ -195,6 +197,7 @@ router.get(
 router.get(
   "/by-code/:qrCode",
   requireRole(...ADMIN_ROLES),
+  requireModule("passes"),
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
       `SELECT p.*, pt.name AS pass_type_name, c.display_name AS company_name
@@ -220,6 +223,7 @@ router.get(
     ]);
     return profile[0] ? profile[0].company_id : null;
   }),
+  requireModule("passes"),
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
       `SELECT p.*, pt.name AS pass_type_name FROM passes p JOIN pass_types pt ON pt.id = p.pass_type_id
@@ -241,6 +245,7 @@ router.get(
     ]);
     return profile[0] ? profile[0].company_id : null;
   }),
+  requireModule("passes"),
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query("SELECT qr_code FROM passes WHERE id = ? AND event_id = ? LIMIT 1", [
       req.params.id,
@@ -257,6 +262,7 @@ router.get(
 router.patch(
   "/:id/void",
   requireRole(...ADMIN_ROLES),
+  requireModule("passes"),
   validate(voidPassSchema),
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query("SELECT * FROM passes WHERE id = ? AND event_id = ? LIMIT 1", [

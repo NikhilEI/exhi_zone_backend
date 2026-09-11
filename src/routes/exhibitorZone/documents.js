@@ -7,10 +7,11 @@ const requireAuth = require("../../middleware/requireAuth");
 const requireEventContext = require("../../middleware/requireEventContext");
 const { upload, sha256File } = require("../../middleware/upload");
 const { ApiError } = require("../../middleware/errorHandler");
+const { hasModuleAccess } = require("../../middleware/requireModule");
 
 const router = express.Router();
 
-const ADMIN_ROLES = ["super_admin", "organiser", "finance"];
+const ADMIN_ROLES = ["super_admin", "organiser", "finance", "operations", "sales"];
 
 // These admin-managed document types are one-per-exhibitor — re-uploading
 // requires deleting the existing one first, rather than accumulating copies.
@@ -29,7 +30,10 @@ async function resolveOwnProfileId(req) {
 }
 
 async function assertProfileAccess(req, profileId) {
-  if (ADMIN_ROLES.includes(req.user.role)) return;
+  if (ADMIN_ROLES.includes(req.user.role)) {
+    if (!hasModuleAccess(req, "documents")) throw new ApiError(403, "Your account does not have access to this module.");
+    return;
+  }
   const own = await resolveOwnProfileId(req);
   if (Number(own) !== Number(profileId)) {
     throw new ApiError(403, "You do not have access to this profile's documents.");
@@ -47,6 +51,9 @@ router.post(
 
     if (!ADMIN_ROLES.includes(req.user.role)) {
       exhibitorProfileId = await resolveOwnProfileId(req);
+    } else if (!hasModuleAccess(req, "documents")) {
+      fs.unlink(req.file.path, () => {});
+      throw new ApiError(403, "Your account does not have access to this module.");
     } else if (!exhibitorProfileId) {
       fs.unlink(req.file.path, () => {});
       throw new ApiError(400, "exhibitorProfileId is required when an admin uploads on behalf of an exhibitor.");
@@ -97,6 +104,8 @@ router.get(
 
     if (!ADMIN_ROLES.includes(req.user.role)) {
       profileId = await resolveOwnProfileId(req);
+    } else if (!hasModuleAccess(req, "documents")) {
+      throw new ApiError(403, "Your account does not have access to this module.");
     }
 
     const params = [req.user.eventId];

@@ -37,13 +37,14 @@ const requireAuth = asyncHandler(async (req, res, next) => {
 
   let role = "exhibitor_staff";
   let companyId = null;
+  let enabledModules = [];
 
   if (globalAdminRows.length > 0) {
     role = "super_admin";
     companyId = globalAdminRows[0].company_id;
   } else if (session.event_id) {
     const [roleRows] = await pool.query(
-      `SELECT r.name AS role_name, uer.company_id FROM user_event_roles uer
+      `SELECT r.name AS role_name, uer.company_id, uer.enabled_modules FROM user_event_roles uer
        JOIN roles r ON r.id = uer.role_id
        WHERE uer.user_id = ? AND uer.event_id = ? AND uer.is_active = 1
        LIMIT 1`,
@@ -52,6 +53,7 @@ const requireAuth = asyncHandler(async (req, res, next) => {
     if (roleRows.length > 0) {
       role = roleRows[0].role_name;
       companyId = roleRows[0].company_id;
+      enabledModules = roleRows[0].enabled_modules ? JSON.parse(roleRows[0].enabled_modules) : [];
     }
   }
 
@@ -68,6 +70,7 @@ const requireAuth = asyncHandler(async (req, res, next) => {
     role,
     eventId: session.event_id,
     companyId,
+    enabledModules,
     sessionId: session.id
   };
 

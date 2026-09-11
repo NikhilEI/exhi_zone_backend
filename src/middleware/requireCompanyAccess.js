@@ -1,7 +1,7 @@
 const { ApiError } = require("./errorHandler");
 const asyncHandler = require("./asyncHandler");
 
-const ADMIN_TIER_ROLES = ["super_admin", "organiser", "finance"];
+const ADMIN_TIER_ROLES = ["super_admin", "organiser", "finance", "operations", "sales"];
 
 // Factory so every exhibitor-scoped route can state exactly how to find the
 // company_id it's guarding — either a route param name (the common case) or

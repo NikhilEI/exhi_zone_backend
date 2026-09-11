@@ -10,11 +10,12 @@ const { ApiError } = require("../../middleware/errorHandler");
 const { resolveTargetProfileId } = require("../../utils/exhibitorProfile");
 const { notifyUser, notifyAdmins } = require("../../utils/notify");
 const { FORM_SCHEMAS } = require("../../validators/forms");
+const { requireModule, hasModuleAccess } = require("../../middleware/requireModule");
 const { z } = require("zod");
 
 const router = express.Router();
 
-const ADMIN_ROLES = ["super_admin", "organiser"];
+const ADMIN_ROLES = ["super_admin", "organiser", "operations", "sales"];
 
 router.use(requireAuth, requireEventContext);
 
@@ -51,6 +52,7 @@ router.get(
 router.get(
   "/admin/templates",
   requireRole(...ADMIN_ROLES),
+  requireModule("services"),
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
       "SELECT * FROM form_templates WHERE event_id = ? ORDER BY form_type, sort_order",
@@ -63,6 +65,7 @@ router.get(
 router.patch(
   "/admin/templates/:id",
   requireRole(...ADMIN_ROLES),
+  requireModule("services"),
   asyncHandler(async (req, res) => {
     const columnMap = { name: "name", description: "description", sortOrder: "sort_order", isActive: "is_active" };
 
@@ -106,7 +109,7 @@ router.post(
     const template = templateRows[0];
     if (!template) throw new ApiError(404, "Form template not found.");
 
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const dataJson = JSON.stringify(parsed.data);
     const initialStatus = template.requires_approval ? "submitted" : "approved";
 
@@ -168,6 +171,7 @@ router.get(
     // e.g. from the mandatory-forms pages in admin mode) wants that one
     // exhibitor's submissions, not the cross-company review list below.
     if (ADMIN_ROLES.includes(req.user.role) && !req.query.profileId) {
+      if (!hasModuleAccess(req, "forms")) throw new ApiError(403, "Your account does not have access to this module.");
       const params = [req.user.eventId];
       let filter = "";
       if (req.query.status) {
@@ -192,7 +196,7 @@ router.get(
       return res.json({ submissions: rows.map((r) => ({ ...r, data: JSON.parse(r.data) })) });
     }
 
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const [rows] = await pool.query(
       `SELECT fs.*, ft.name AS template_name, ft.slug AS template_slug FROM form_submissions fs
        JOIN form_templates ft ON ft.id = fs.form_template_id
@@ -214,6 +218,7 @@ router.get(
     ]);
     return profile[0] ? profile[0].company_id : null;
   }),
+  requireModule("forms"),
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
       `SELECT fs.*, ft.name AS template_name, ft.slug AS template_slug, c.display_name AS company_name,
@@ -243,6 +248,7 @@ const reviewSchema = z.object({
 router.patch(
   "/submissions/:id/status",
   requireRole(...ADMIN_ROLES),
+  requireModule("forms"),
   asyncHandler(async (req, res) => {
     const parsed = reviewSchema.safeParse(req.body);
     if (!parsed.success) {

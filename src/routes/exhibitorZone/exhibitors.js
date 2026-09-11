@@ -17,10 +17,11 @@ const {
   createProfileSchema,
   updateProfileStatusSchema
 } = require("../../validators/company");
+const { requireModule, hasModuleAccess } = require("../../middleware/requireModule");
 
 const router = express.Router();
 
-const ADMIN_ROLES = ["super_admin", "organiser", "finance"];
+const ADMIN_ROLES = ["super_admin", "organiser", "finance", "operations", "sales"];
 
 router.use(requireAuth, requireEventContext);
 
@@ -37,6 +38,12 @@ function decorateCompany(row) {
 router.get(
   "/",
   requireRole(...ADMIN_ROLES),
+  // Shared by the Exhibitor CRM list and the Pass Management allocation
+  // dropdown (which fetches ?status=approved) — either module is enough.
+  (req, res, next) =>
+    hasModuleAccess(req, "companies") || hasModuleAccess(req, "passes")
+      ? next()
+      : next(new ApiError(403, "Your account does not have access to this module.")),
   asyncHandler(async (req, res) => {
     const status = req.query.status;
     const params = [req.user.eventId];
@@ -121,7 +128,8 @@ router.patch(
 
 router.patch(
   "/companies/:companyId",
-  requireRole("super_admin", "organiser"),
+  requireRole("super_admin", "organiser", "operations", "sales"),
+  requireModule("companies"),
   validate(updateCompanySchema),
   asyncHandler(async (req, res) => {
     const fields = req.body;
@@ -183,7 +191,8 @@ router.get(
 
 router.post(
   "/companies",
-  requireRole("super_admin", "organiser"),
+  requireRole("super_admin", "organiser", "operations", "sales"),
+  requireModule("companies"),
   validate(createCompanySchema),
   asyncHandler(async (req, res) => {
     const b = req.body;
@@ -218,7 +227,8 @@ router.post(
 
 router.post(
   "/profiles",
-  requireRole("super_admin", "organiser"),
+  requireRole("super_admin", "organiser", "operations", "sales"),
+  requireModule("companies"),
   validate(createProfileSchema),
   asyncHandler(async (req, res) => {
     const b = req.body;
@@ -252,7 +262,8 @@ router.post(
 
 router.patch(
   "/profiles/:profileId/status",
-  requireRole("super_admin", "organiser"),
+  requireRole("super_admin", "organiser", "operations", "sales"),
+  requireModule("companies"),
   validate(updateProfileStatusSchema),
   asyncHandler(async (req, res) => {
     const { status, rejectionReason } = req.body;

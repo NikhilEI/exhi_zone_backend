@@ -10,15 +10,16 @@ const { hashPassword } = require("../../../utils/argon");
 const { generateSecureToken, hashToken } = require("../../../utils/crypto");
 const { notifyAdmins } = require("../../../utils/notify");
 const { sendMail, escapeHtml } = require("../../../lib/mailer");
+const { requireModule } = require("../../../middleware/requireModule");
 
 const router = express.Router();
 
-const ADMIN_ROLES = ["super_admin", "organiser"];
+const ADMIN_ROLES = ["super_admin", "organiser", "operations", "sales"];
 const DEFAULT_PASS_TYPE_CODE = "EXH_STAFF";
 const RESET_TOKEN_TTL_MINUTES = Number(process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES) || 30;
 const FRONTEND_BASE_URL = process.env.FRONTEND_BASE_URL || "http://localhost:3010";
 
-router.use(requireAuth, requireEventContext, requireRole(...ADMIN_ROLES));
+router.use(requireAuth, requireEventContext, requireRole(...ADMIN_ROLES), requireModule("registrations"));
 
 router.get(
   "/",

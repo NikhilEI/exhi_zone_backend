@@ -7,11 +7,12 @@ const requireEventContext = require("../../../middleware/requireEventContext");
 const { ApiError } = require("../../../middleware/errorHandler");
 const { decryptNullable } = require("../../../utils/crypto");
 const { toCsv, hyperlinkFormula } = require("../../../utils/csv");
+const { requireModule } = require("../../../middleware/requireModule");
 
 const router = express.Router();
-const ADMIN_ROLES = ["super_admin", "organiser", "finance"];
+const ADMIN_ROLES = ["super_admin", "organiser", "finance", "operations", "sales"];
 
-router.use(requireAuth, requireEventContext, requireRole(...ADMIN_ROLES));
+router.use(requireAuth, requireEventContext, requireRole(...ADMIN_ROLES), requireModule("exports"));
 
 function baseUrl(req) {
   return `${req.protocol}://${req.get("host")}/api/exhibitor-zone`;

@@ -1,6 +1,7 @@
 const { ApiError } = require("../middleware/errorHandler");
+const { hasModuleAccess } = require("../middleware/requireModule");
 
-const ADMIN_TIER_ROLES = ["super_admin", "organiser", "finance"];
+const ADMIN_TIER_ROLES = ["super_admin", "organiser", "finance", "operations", "sales"];
 
 // Resolves the calling exhibitor user's own exhibitor_event_profiles.id for
 // the session's active event — the anchor id most exhibitor-scoped routes
@@ -21,12 +22,20 @@ async function resolveOwnProfileId(pool, req) {
 // this is what powers "Admin can edit any exhibitor's forms" across every
 // mandatory-forms/forms route. A non-admin caller can never use this to see
 // or edit someone else's data: the override is only honored for
-// super_admin/organiser/finance, everyone else always gets their own profile
-// regardless of what (if anything) they pass as ?profileId=.
-async function resolveTargetProfileId(pool, req) {
+// super_admin/organiser/finance/operations/sales, everyone else always gets
+// their own profile regardless of what (if anything) they pass as
+// ?profileId=. An operations/sales caller additionally needs the given
+// moduleKey enabled on their account (organiser/finance/super_admin are
+// never module-gated) — pass the module that owns this route, e.g.
+// "exhibitor-progress" for the mandatory-forms pages or "forms" for the
+// generic form-submission routes.
+async function resolveTargetProfileId(pool, req, moduleKey) {
   const requestedId = req.query && req.query.profileId ? Number(req.query.profileId) : null;
 
   if (requestedId && ADMIN_TIER_ROLES.includes(req.user.role)) {
+    if (moduleKey && !hasModuleAccess(req, moduleKey)) {
+      throw new ApiError(403, "Your account does not have access to this module.");
+    }
     const [rows] = await pool.query(
       "SELECT id FROM exhibitor_event_profiles WHERE id = ? AND event_id = ? LIMIT 1",
       [requestedId, req.user.eventId]

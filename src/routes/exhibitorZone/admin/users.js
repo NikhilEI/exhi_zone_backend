@@ -8,11 +8,16 @@ const requireEventContext = require("../../../middleware/requireEventContext");
 const validate = require("../../../middleware/validate");
 const { ApiError } = require("../../../middleware/errorHandler");
 const { hashPassword } = require("../../../utils/argon");
+const { ADMIN_MODULE_KEYS } = require("../../../config/adminModules");
 const { z } = require("zod");
 
 const router = express.Router();
 
 const ADMIN_TIER_ROLES = ["super_admin", "organiser", "finance"];
+// Operations/sales are restricted admin-tier roles — an admin picks exactly
+// which modules each account can reach (see enabled_modules + requireModule).
+const RESTRICTED_ROLES = ["operations", "sales"];
+const ALL_CREATABLE_ROLES = [...ADMIN_TIER_ROLES, ...RESTRICTED_ROLES];
 
 router.use(requireAuth, requireEventContext, requireRole("super_admin"));
 
@@ -20,17 +25,21 @@ router.get(
   "/",
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
-      `SELECT u.id, u.uuid, u.email, u.first_name, u.last_name, u.is_active, u.last_login_at, r.name AS role
+      `SELECT u.id, u.uuid, u.email, u.first_name, u.last_name, u.is_active, u.last_login_at, r.name AS role,
+              uer.enabled_modules
        FROM users u
        JOIN user_event_roles uer ON uer.user_id = u.id
        JOIN roles r ON r.id = uer.role_id
-       WHERE uer.is_active = 1 AND r.name IN ('super_admin', 'organiser', 'finance')
+       WHERE uer.is_active = 1 AND r.name IN ('super_admin', 'organiser', 'finance', 'operations', 'sales')
          AND (r.name = 'super_admin' OR uer.event_id = ?)
        GROUP BY u.id, r.name
        ORDER BY u.created_at DESC`,
       [req.user.eventId]
     );
-    res.json({ users: rows });
+    res.json({
+      users: rows.map((u) => ({ ...u, enabled_modules: u.enabled_modules ? JSON.parse(u.enabled_modules) : [] })),
+      availableModules: ADMIN_MODULE_KEYS
+    });
   })
 );
 
@@ -39,7 +48,8 @@ const createUserSchema = z.object({
   password: z.string().min(8).max(200),
   firstName: z.string().trim().min(1).max(100),
   lastName: z.string().trim().min(1).max(100),
-  role: z.enum(ADMIN_TIER_ROLES)
+  role: z.enum(ALL_CREATABLE_ROLES),
+  enabledModules: z.array(z.enum(ADMIN_MODULE_KEYS)).optional()
 });
 
 router.post(
@@ -54,6 +64,10 @@ router.post(
     const [roleRows] = await pool.query("SELECT id FROM roles WHERE name = ? LIMIT 1", [b.role]);
     if (roleRows.length === 0) throw new ApiError(500, "Server misconfiguration: role not found.");
 
+    // Only operations/sales are ever module-gated (see requireModule) — the
+    // toggle is meaningless, so ignored, for every other role.
+    const enabledModules = RESTRICTED_ROLES.includes(b.role) ? b.enabledModules || [] : null;
+
     const passwordHash = await hashPassword(b.password);
     const connection = await pool.getConnection();
     try {
@@ -66,9 +80,9 @@ router.post(
       );
 
       await connection.query(
-        `INSERT INTO user_event_roles (user_id, event_id, role_id, granted_by, granted_at, is_active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, NOW(), 1, NOW(), NOW())`,
-        [userResult.insertId, req.user.eventId, roleRows[0].id, req.user.id]
+        `INSERT INTO user_event_roles (user_id, event_id, role_id, granted_by, granted_at, is_active, enabled_modules, created_at, updated_at)
+         VALUES (?, ?, ?, ?, NOW(), 1, ?, NOW(), NOW())`,
+        [userResult.insertId, req.user.eventId, roleRows[0].id, req.user.id, enabledModules ? JSON.stringify(enabledModules) : null]
       );
 
       await connection.commit();
@@ -99,7 +113,7 @@ router.patch(
   })
 );
 
-const updateRoleSchema = z.object({ role: z.enum(ADMIN_TIER_ROLES) });
+const updateRoleSchema = z.object({ role: z.enum(ALL_CREATABLE_ROLES) });
 
 router.patch(
   "/:id/role",
@@ -114,11 +128,40 @@ router.patch(
     );
     if (grantRows.length === 0) throw new ApiError(404, "This user has no active grant for the active event.");
 
-    await pool.query("UPDATE user_event_roles SET role_id = ?, updated_at = NOW() WHERE id = ?", [
-      roleRows[0].id,
+    // Switching away from operations/sales clears any previously granted
+    // module list — it's meaningless (and unenforced) for every other role.
+    const enabledModules = RESTRICTED_ROLES.includes(req.body.role) ? undefined : null;
+
+    await pool.query(
+      `UPDATE user_event_roles SET role_id = ?, updated_at = NOW()${enabledModules === null ? ", enabled_modules = NULL" : ""} WHERE id = ?`,
+      [roleRows[0].id, grantRows[0].id]
+    );
+    res.json({ message: "User role updated." });
+  })
+);
+
+const updateModulesSchema = z.object({ enabledModules: z.array(z.enum(ADMIN_MODULE_KEYS)) });
+
+router.patch(
+  "/:id/modules",
+  validate(updateModulesSchema),
+  asyncHandler(async (req, res) => {
+    const [grantRows] = await pool.query(
+      `SELECT uer.id, r.name AS role_name FROM user_event_roles uer
+       JOIN roles r ON r.id = uer.role_id
+       WHERE uer.user_id = ? AND uer.event_id = ? AND uer.is_active = 1 LIMIT 1`,
+      [req.params.id, req.user.eventId]
+    );
+    if (grantRows.length === 0) throw new ApiError(404, "This user has no active grant for the active event.");
+    if (!RESTRICTED_ROLES.includes(grantRows[0].role_name)) {
+      throw new ApiError(400, "Only Operations and Sales accounts have per-module access — every other role already has full access.");
+    }
+
+    await pool.query("UPDATE user_event_roles SET enabled_modules = ?, updated_at = NOW() WHERE id = ?", [
+      JSON.stringify(req.body.enabledModules),
       grantRows[0].id
     ]);
-    res.json({ message: "User role updated." });
+    res.json({ message: "Module access updated." });
   })
 );
 

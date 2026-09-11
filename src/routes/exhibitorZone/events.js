@@ -7,6 +7,7 @@ const requireRole = require("../../middleware/requireRole");
 const validate = require("../../middleware/validate");
 const { ApiError } = require("../../middleware/errorHandler");
 const { createEventSchema, updateEventSchema } = require("../../validators/event");
+const { requireModule } = require("../../middleware/requireModule");
 
 const router = express.Router();
 
@@ -42,7 +43,8 @@ router.get(
 
 router.post(
   "/",
-  requireRole("super_admin", "organiser"),
+  requireRole("super_admin", "organiser", "operations", "sales"),
+  requireModule("events"),
   validate(createEventSchema),
   asyncHandler(async (req, res) => {
     const b = req.body;
@@ -78,7 +80,8 @@ router.post(
 
 router.patch(
   "/:id",
-  requireRole("super_admin", "organiser"),
+  requireRole("super_admin", "organiser", "operations", "sales"),
+  requireModule("events"),
   validate(updateEventSchema),
   asyncHandler(async (req, res) => {
     const columnMap = {

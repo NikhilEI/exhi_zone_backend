@@ -7,12 +7,13 @@ const requireEventContext = require("../../middleware/requireEventContext");
 const validate = require("../../middleware/validate");
 const { ApiError } = require("../../middleware/errorHandler");
 const { createCategorySchema, createItemSchema, updateItemSchema } = require("../../validators/catalogue");
+const { requireModule } = require("../../middleware/requireModule");
 
 const router = express.Router();
 
-const ADMIN_ROLES = ["super_admin", "organiser"];
+const ADMIN_ROLES = ["super_admin", "organiser", "operations", "sales"];
 
-router.use(requireAuth, requireEventContext);
+router.use(requireAuth, requireEventContext, requireModule("catalogue"));
 
 router.get(
   "/categories",

@@ -918,7 +918,7 @@ CREATE TABLE IF NOT EXISTS `product_subcategories` (
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE IF NOT EXISTS `roles` (
   `id` tinyint(3) unsigned NOT NULL AUTO_INCREMENT,
-  `name` varchar(50) NOT NULL COMMENT 'super_admin|organiser|exhibitor_admin|exhibitor_staff|finance',
+  `name` varchar(50) NOT NULL COMMENT 'super_admin|organiser|exhibitor_admin|exhibitor_staff|finance|operations|sales',
   `label` varchar(100) NOT NULL,
   `description` varchar(500) DEFAULT NULL,
   `is_system` tinyint(1) NOT NULL DEFAULT 1 COMMENT '1=built-in, cannot delete',
@@ -1146,6 +1146,7 @@ CREATE TABLE IF NOT EXISTS `user_event_roles` (
   `granted_at` datetime NOT NULL DEFAULT current_timestamp(),
   `expires_at` datetime DEFAULT NULL,
   `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `enabled_modules` text DEFAULT NULL COMMENT 'JSON array of admin module keys (see src/config/adminModules.js) this grant can access — only enforced for operations/sales roles; NULL/ignored for every other role, which always has full access.' CHECK (json_valid(`enabled_modules`)),
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
@@ -1200,6 +1201,18 @@ CREATE TABLE IF NOT EXISTS `users` (
 ALTER TABLE `users`
   ADD COLUMN IF NOT EXISTS `username` varchar(50) DEFAULT NULL COMMENT 'Optional alternate login identifier — e.g. carried over from a legacy system import. Login accepts either this or email.' AFTER `email`,
   ADD UNIQUE KEY IF NOT EXISTS `uq_users_username` (`username`);
+
+-- Idempotent column addition for existing databases — see user_event_roles above.
+ALTER TABLE `user_event_roles`
+  ADD COLUMN IF NOT EXISTS `enabled_modules` text DEFAULT NULL COMMENT 'JSON array of admin module keys this grant can access — only enforced for operations/sales roles.' AFTER `is_active`;
+
+-- Operations and Sales are restricted admin-tier roles: an admin creates
+-- these accounts and picks exactly which admin modules each one can reach
+-- (see enabled_modules above and src/config/adminModules.js). INSERT IGNORE
+-- keeps this idempotent against the uq_roles_name unique key.
+INSERT IGNORE INTO `roles` (`name`, `label`, `description`, `is_system`) VALUES
+  ('operations', 'Operations', 'Restricted admin access — modules granted individually per account', 1),
+  ('sales', 'Sales', 'Restricted admin access — modules granted individually per account', 1);
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 

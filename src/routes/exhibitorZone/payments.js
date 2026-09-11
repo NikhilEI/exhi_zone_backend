@@ -13,9 +13,10 @@ const { resolveOwnProfileId } = require("../../utils/exhibitorProfile");
 const { encrypt } = require("../../utils/crypto");
 const { getRazorpayClient, isRazorpayConfigured, verifyPaymentSignature } = require("../../utils/razorpay");
 const { markTransactionSuccess, markTransactionFailed } = require("../../utils/paymentTransactions");
+const { requireModule } = require("../../middleware/requireModule");
 
 const router = express.Router();
-const ADMIN_ROLES = ["super_admin", "organiser", "finance"];
+const ADMIN_ROLES = ["super_admin", "organiser", "finance", "operations", "sales"];
 
 router.use(requireAuth, requireEventContext);
 
@@ -171,6 +172,7 @@ router.get(
     );
     return rows[0] ? rows[0].company_id : null;
   }),
+  requireModule("payments"),
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
       `SELECT id, gateway, amount, currency, status, gateway_status, processed_at, created_at
@@ -207,6 +209,7 @@ router.get(
 router.get(
   "/admin",
   requireRole(...ADMIN_ROLES),
+  requireModule("payments"),
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
       `SELECT pt.id, pt.order_id, o.order_number, c.display_name AS company_name, pt.gateway, pt.amount,

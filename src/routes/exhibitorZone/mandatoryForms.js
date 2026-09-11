@@ -8,6 +8,7 @@ const validate = require("../../middleware/validate");
 const { ApiError } = require("../../middleware/errorHandler");
 const { resolveTargetProfileId, isAdminOverride } = require("../../utils/exhibitorProfile");
 const { notifyAdmins } = require("../../utils/notify");
+const { requireModule } = require("../../middleware/requireModule");
 const {
   exhibitorInformationSchema,
   productInformationSchema,
@@ -21,7 +22,7 @@ const GUIDELINE_VERSION = 1;
 
 const router = express.Router();
 
-const ADMIN_ROLES = ["super_admin", "organiser"];
+const ADMIN_ROLES = ["super_admin", "organiser", "operations", "sales"];
 
 router.use(requireAuth, requireEventContext);
 
@@ -92,7 +93,7 @@ const REGISTRY_SELECT = `
 router.get(
   "/",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const [rows] = await pool.query(REGISTRY_SELECT, [profileId, profileId, profileId, req.user.eventId]);
     res.json({ forms: rows });
   })
@@ -102,6 +103,7 @@ router.get(
 router.get(
   "/status/:profileId",
   requireRole(...ADMIN_ROLES, "finance"),
+  requireModule("exhibitor-progress"),
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query(REGISTRY_SELECT, [
       req.params.profileId,
@@ -119,6 +121,7 @@ router.get(
 router.get(
   "/admin/definitions",
   requireRole(...ADMIN_ROLES),
+  requireModule("mandatory-forms"),
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
       "SELECT * FROM mandatory_form_definitions WHERE event_id = ? ORDER BY sort_order",
@@ -131,6 +134,7 @@ router.get(
 router.patch(
   "/admin/definitions/:id",
   requireRole(...ADMIN_ROLES),
+  requireModule("mandatory-forms"),
   asyncHandler(async (req, res) => {
     const columnMap = { name: "name", description: "description", sortOrder: "sort_order", isActive: "is_active" };
 
@@ -165,6 +169,7 @@ router.patch(
 router.get(
   "/admin/exhibitor-progress",
   requireRole(...ADMIN_ROLES, "finance"),
+  requireModule("exhibitor-progress"),
   asyncHandler(async (req, res) => {
     const eventId = req.user.eventId;
     const [profiles] = await pool.query(
@@ -238,7 +243,7 @@ router.get(
 router.get(
   "/exhibitor-information",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const [rows] = await pool.query(
       "SELECT * FROM exhibitor_directory_info WHERE exhibitor_profile_id = ? AND event_id = ? LIMIT 1",
       [profileId, req.user.eventId]
@@ -256,7 +261,7 @@ router.patch(
   "/exhibitor-information",
   validate(exhibitorInformationSchema),
   asyncHandler(async (req, res) => {
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const b = req.body;
 
     // Enforce per-field locks set by an admin/legacy import: a regular
@@ -360,7 +365,7 @@ router.patch(
 router.get(
   "/product-information",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const [rows] = await pool.query(
       `SELECT epc.subcategory_id, epc.other_specification, psc.name AS subcategory_name, psc.category_id
        FROM exhibitor_product_categories epc
@@ -376,7 +381,7 @@ router.patch(
   "/product-information",
   validate(productInformationSchema),
   asyncHandler(async (req, res) => {
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const { subcategoryIds, otherSpecification } = req.body;
 
     const [validRows] = await pool.query(
@@ -448,7 +453,7 @@ router.get(
 router.get(
   "/principal-agent-information",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
 
     const [records] = await pool.query(
       `SELECT r.id, r.type, r.company_name, r.website, r.country_name, r.country_code,
@@ -473,7 +478,7 @@ router.post(
   "/principal-agent-information/records",
   validate(principalAgentRecordSchema),
   asyncHandler(async (req, res) => {
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const b = req.body;
 
     if (b.sectorId) {
@@ -537,7 +542,7 @@ router.post(
 router.delete(
   "/principal-agent-information/records/:id",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const recordId = Number(req.params.id);
     if (!Number.isInteger(recordId) || recordId <= 0) throw new ApiError(400, "Invalid record id.");
 
@@ -587,7 +592,7 @@ router.patch(
   "/principal-agent-information/declaration",
   validate(principalAgentDeclarationSchema),
   asyncHandler(async (req, res) => {
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const { noPrincipalAgent } = req.body;
 
     const connection = await pool.getConnection();
@@ -632,7 +637,7 @@ router.patch(
 router.get(
   "/sound-noise-guidelines",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const [rows] = await pool.query(
       "SELECT acknowledged, acknowledged_at, guideline_version FROM sound_noise_guideline_acknowledgement WHERE exhibitor_profile_id = ? AND event_id = ? LIMIT 1",
       [profileId, req.user.eventId]
@@ -645,7 +650,7 @@ router.patch(
   "/sound-noise-guidelines",
   validate(soundNoiseAcknowledgementSchema),
   asyncHandler(async (req, res) => {
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
 
     const connection = await pool.getConnection();
     try {
@@ -687,7 +692,7 @@ router.patch(
 router.get(
   "/badges-for-exhibitors",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const [records] = await pool.query(
       `SELECT id, badge_id, full_name, designation, company_name, country, country_code, mobile_no, email, created_at
        FROM badge_records WHERE exhibitor_profile_id = ? AND event_id = ? ORDER BY created_at`,
@@ -703,7 +708,7 @@ router.post(
   "/badges-for-exhibitors/records",
   validate(badgeRecordSchema),
   asyncHandler(async (req, res) => {
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const b = req.body;
 
     const connection = await pool.getConnection();
@@ -750,7 +755,7 @@ router.post(
 router.delete(
   "/badges-for-exhibitors/records/:id",
   asyncHandler(async (req, res) => {
-    const profileId = await resolveTargetProfileId(pool, req);
+    const profileId = await resolveTargetProfileId(pool, req, "exhibitor-progress");
     const recordId = Number(req.params.id);
     if (!Number.isInteger(recordId) || recordId <= 0) throw new ApiError(400, "Invalid record id.");
 
@@ -795,6 +800,7 @@ router.delete(
 router.get(
   "/badges-for-exhibitors/admin/:profileId",
   requireRole(...ADMIN_ROLES, "finance"),
+  requireModule("exhibitor-progress"),
   asyncHandler(async (req, res) => {
     const [records] = await pool.query(
       `SELECT id, badge_id, full_name, designation, company_name, country, country_code, mobile_no, email, created_at

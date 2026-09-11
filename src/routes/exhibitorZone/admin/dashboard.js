@@ -4,10 +4,11 @@ const asyncHandler = require("../../../middleware/asyncHandler");
 const requireAuth = require("../../../middleware/requireAuth");
 const requireRole = require("../../../middleware/requireRole");
 const requireEventContext = require("../../../middleware/requireEventContext");
+const { requireModule } = require("../../../middleware/requireModule");
 
 const router = express.Router();
 
-router.use(requireAuth, requireEventContext, requireRole("super_admin", "organiser", "finance"));
+router.use(requireAuth, requireEventContext, requireRole("super_admin", "organiser", "finance", "operations", "sales"), requireModule("dashboard"));
 
 router.get(
   "/",

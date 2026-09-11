@@ -7,12 +7,13 @@ const requireEventContext = require("../../middleware/requireEventContext");
 const validate = require("../../middleware/validate");
 const { ApiError } = require("../../middleware/errorHandler");
 const { createStallSchema, updateStallSchema, createAllocationSchema } = require("../../validators/stall");
+const { requireModule } = require("../../middleware/requireModule");
 
 const router = express.Router();
 
-const ADMIN_ROLES = ["super_admin", "organiser"];
+const ADMIN_ROLES = ["super_admin", "organiser", "operations", "sales"];
 
-router.use(requireAuth, requireEventContext);
+router.use(requireAuth, requireEventContext, requireModule("stalls"));
 
 router.get(
   "/",

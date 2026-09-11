@@ -32,7 +32,7 @@ const FRONTEND_BASE_URL = process.env.FRONTEND_BASE_URL || "http://localhost:301
 // indistinguishable and preventing user enumeration by timing.
 let dummyHashPromise = hashPassword("not-a-real-password-used-for-timing-only");
 
-function toPublicUser(user, role, companyId, eventId) {
+function toPublicUser(user, role, companyId, eventId, enabledModules) {
   return {
     id: user.id,
     uuid: user.uuid,
@@ -41,7 +41,11 @@ function toPublicUser(user, role, companyId, eventId) {
     lastName: user.last_name,
     role,
     companyId,
-    eventId
+    eventId,
+    // Only meaningful for operations/sales — the sidebar uses this to hide
+    // modules the account can't reach. Every other role gets [] here and
+    // ignores it (full access is implicit).
+    enabledModules: enabledModules || []
   };
 }
 
@@ -236,7 +240,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const [rows] = await pool.query("SELECT * FROM users WHERE id = ? LIMIT 1", [req.user.id]);
     const user = rows[0];
-    res.json({ user: toPublicUser(user, req.user.role, req.user.companyId, req.user.eventId) });
+    res.json({ user: toPublicUser(user, req.user.role, req.user.companyId, req.user.eventId, req.user.enabledModules) });
   })
 );
 

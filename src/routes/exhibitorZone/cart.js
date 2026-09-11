@@ -9,11 +9,12 @@ const validate = require("../../middleware/validate");
 const { ApiError } = require("../../middleware/errorHandler");
 const { resolveOwnProfileId } = require("../../utils/exhibitorProfile");
 const { notifyAdmins } = require("../../utils/notify");
+const { requireModule } = require("../../middleware/requireModule");
 const { z } = require("zod");
 
 const router = express.Router();
 
-const ADMIN_ROLES = ["super_admin", "organiser", "finance"];
+const ADMIN_ROLES = ["super_admin", "organiser", "finance", "operations", "sales"];
 
 router.use(requireAuth, requireEventContext);
 
@@ -64,6 +65,7 @@ router.get(
 router.get(
   "/all",
   requireRole(...ADMIN_ROLES),
+  requireModule("carts"),
   asyncHandler(async (req, res) => {
     const [carts] = await pool.query(
       `SELECT c.id, c.exhibitor_profile_id, c.status, c.updated_at, comp.display_name AS company_name
@@ -96,6 +98,7 @@ router.get(
 router.get(
   "/:profileId",
   requireRole(...ADMIN_ROLES),
+  requireModule("carts"),
   asyncHandler(async (req, res) => {
     const [cartRows] = await pool.query(
       "SELECT * FROM carts WHERE event_id = ? AND exhibitor_profile_id = ? AND status = 'active' LIMIT 1",
@@ -178,6 +181,7 @@ router.delete(
 router.post(
   "/:profileId/items",
   requireRole(...ADMIN_ROLES),
+  requireModule("carts"),
   validate(addItemSchema),
   asyncHandler(async (req, res) => {
     await addItemToCart(req.params.profileId, req.user.id, req.user.eventId, req.body.serviceItemId, req.body.quantity);
@@ -188,6 +192,7 @@ router.post(
 router.delete(
   "/:profileId/items/:itemId",
   requireRole(...ADMIN_ROLES),
+  requireModule("carts"),
   asyncHandler(async (req, res) => {
     await removeItemFromCart(req.params.profileId, req.user.eventId, req.params.itemId);
     res.json({ message: "Removed from cart." });
