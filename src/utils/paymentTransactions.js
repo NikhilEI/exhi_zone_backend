@@ -1,5 +1,6 @@
 const { encrypt } = require("./crypto");
 const { notifyUser, notifyAdmins } = require("./notify");
+const { convertReservedToSold } = require("./inventory");
 
 const INVOICE_STATUS_MAP = { unpaid: "sent", partially_paid: "partially_paid", paid: "paid", refunded: "void" };
 
@@ -48,6 +49,14 @@ async function markTransactionSuccess(pool, { transaction, gatewayPaymentId, gat
     const newAmountDue = Math.max(0, Number(order.grand_total) - newAmountPaid);
     const paymentStatus = newAmountDue <= 0.005 ? "paid" : "partially_paid";
     const orderStatus = paymentStatus === "paid" && order.status === "pending" ? "confirmed" : order.status;
+
+    // Only the transition INTO fully paid converts stock — a second
+    // successful transaction on an order that was already paid (shouldn't
+    // normally happen, but the idempotency guard above only covers the
+    // transaction row, not the order) must not double-convert.
+    if (paymentStatus === "paid" && order.payment_status !== "paid") {
+      await convertReservedToSold(connection, order.id);
+    }
 
     await connection.query("UPDATE orders SET payment_status = ?, status = ?, updated_at = NOW() WHERE id = ?", [
       paymentStatus,

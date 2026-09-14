@@ -151,7 +151,13 @@ async function planImport(pool, wb) {
       companyName,
       hallNo: normText(r[3]),
       boothNo: normText(r[4]),
+      // firstName falls back to the company name so users.first_name (a
+      // login-account display name, NOT NULL) and brand_name are never
+      // blank — but contactFirstName stays the raw, un-fallen-back value so
+      // exhibitor_directory_info.contact_name is never silently filled with
+      // the company name where the sheet just had no contact person listed.
       firstName: normText(r[5]) || companyName,
+      contactFirstName: normText(r[5]),
       lastName: normText(r[6]),
       designation: normText(r[7]),
       email,
@@ -512,7 +518,7 @@ async function applyImport(pool, plan) {
           c.email || null,
           c.website || null,
           c.companyProfile || null,
-          c.firstName || null,
+          c.contactFirstName || null,
           c.designation || null,
           c.fullyComplete ? "completed" : "pending"
         ]
